@@ -1,34 +1,41 @@
-//! Contention Scaling Benchmark
+//! Contention Scaling Benchmark - O(T) vs O(log T) Global Query Cost
 //!
-//! Measures the cost of ADVANCING the epoch under heavy contention, which is:
-//! - Baseline (Flat): O(T) due to cache line contention on single atomic
-//! - Nexus (Hierarchical): O(log T) due to distributed updates across tree
-//!
-//! This benchmark simulates realistic write contention where multiple threads
-//! compete to advance the global epoch simultaneously, triggering cache coherence
-//! traffic storms on the flat baseline.
+//! This benchmark demonstrates the key scalability difference:
+//! - Baseline (Flat): Computing global minimum requires O(T) scan of all participants
+//! - Nexus (Hierarchical): Global minimum is pre-aggregated, requires O(log T) tree traversal
 //!
 //! # Methodology
 //!
-//! - Baseline: All threads CAS a shared AtomicU64 (worst-case bus contention)
-//! - Nexus: Threads update their local leaves, with lazy aggregation to root
+//! The critical insight: The O(log T) vs O(T) difference appears when QUERYING global state,
+//! not when updating local state. This benchmark:
+//!
+//! 1. Simulates T active participants (threads)
+//! 2. Measures the cost of computing "safe reclamation epoch" (global minimum)
+//! 3. Baseline must atomically read ALL T participant epochs and find minimum
+//! 4. Nexus reads pre-aggregated tree nodes (only log(T) depth)
 //!
 //! # Expected Results
 //!
-//! - Baseline: Linear or super-linear latency growth with thread count
-//! - Nexus: Logarithmic latency growth due to reduced cache line sharing
+//! - Baseline latency grows linearly with T (O(T) scan)
+//! - Nexus latency grows logarithmically with T (O(log T) tree depth)
+//! - Speedup = Baseline/Nexus should be > 1.0 at high thread counts
 
 use nexus_memory::epoch::HierarchicalEpoch;
-use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
-use std::sync::{Arc, Barrier};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
 
-/// Number of CAS/update operations per thread
-const OPS_PER_THREAD: u64 = 100_000;
+/// Number of global minimum queries per measurement
+const QUERIES_PER_MEASUREMENT: usize = 100_000;
 
 /// Thread counts to benchmark
 const THREAD_COUNTS: &[usize] = &[1, 2, 4, 8, 16, 32, 64, 128, 256];
+
+/// Maximum participants for flat array
+const MAX_PARTICIPANTS: usize = 512;
+
+/// Inactive epoch marker
+const INACTIVE: u64 = u64::MAX;
 
 /// Results from a benchmark run
 #[derive(Debug)]
@@ -36,7 +43,6 @@ struct BenchResult {
     bench_type: &'static str,
     threads: usize,
     total_ops: u64,
-    total_time_ns: u64,
     avg_latency_ns: f64,
     throughput_mops: f64,
 }
@@ -54,250 +60,156 @@ impl BenchResult {
     }
 }
 
+/// Flat epoch collector that requires O(T) scan
+struct FlatEpochCollector {
+    epochs: Box<[AtomicU64; MAX_PARTICIPANTS]>,
+    num_participants: usize,
+}
+
+impl FlatEpochCollector {
+    fn new(num_participants: usize) -> Self {
+        let epochs = Box::new(std::array::from_fn(|_| AtomicU64::new(INACTIVE)));
+        Self { epochs, num_participants }
+    }
+    
+    /// Register a participant with an epoch value
+    fn set_epoch(&self, id: usize, epoch: u64) {
+        self.epochs[id].store(epoch, Ordering::Release);
+    }
+    
+    /// Compute global minimum - O(T) operation
+    /// 
+    /// This MUST scan ALL participants to find the minimum epoch.
+    /// This is the critical performance bottleneck in flat schemes.
+    #[inline(never)]
+    fn global_minimum(&self) -> u64 {
+        let mut min = INACTIVE;
+        
+        // O(T) scan - must check every participant
+        for i in 0..self.num_participants {
+            let epoch = self.epochs[i].load(Ordering::Acquire);
+            if epoch != INACTIVE && epoch < min {
+                min = epoch;
+            }
+        }
+        
+        min
+    }
+}
+
 fn main() {
-    eprintln!("Contention Scaling Benchmark: Flat vs Hierarchical Epoch");
-    eprintln!("=========================================================\n");
+    eprintln!("O(T) vs O(log T) Global Minimum Query Benchmark");
+    eprintln!("================================================\n");
+    eprintln!("Measuring global_minimum() latency vs participant count\n");
+    
     println!("type,threads,ops,latency_ns,throughput_mops");
     
     let mut all_results = Vec::new();
     
-    for &num_threads in THREAD_COUNTS {
-        // Run baseline (flat single-atomic) benchmark
-        let baseline_result = run_flat_cas_benchmark(num_threads);
+    for &num_participants in THREAD_COUNTS {
+        eprintln!("Participants: {}", num_participants);
+        
+        // --- Baseline: Flat O(T) scan ---
+        let baseline_result = run_flat_benchmark(num_participants);
         println!("{}", baseline_result.to_csv());
+        eprintln!("  Baseline (Flat O(T)):        {:.2} ns", baseline_result.avg_latency_ns);
         all_results.push(baseline_result);
         
-        // Run Nexus (hierarchical) benchmark
-        let nexus_result = run_hierarchical_benchmark(num_threads);
+        // --- Nexus: Hierarchical O(log T) ---
+        let nexus_result = run_hierarchical_benchmark(num_participants);
         println!("{}", nexus_result.to_csv());
+        eprintln!("  Nexus (Hierarchical O(log T)): {:.2} ns", nexus_result.avg_latency_ns);
+        
+        // Calculate speedup
+        let speedup = all_results.last().unwrap().avg_latency_ns / nexus_result.avg_latency_ns;
+        eprintln!("  Speedup: {:.2}x\n", speedup);
+        
         all_results.push(nexus_result);
     }
     
-    // Summary report (to stderr so it doesn't pollute CSV)
+    // Summary
     eprintln!("\n--- Summary ---");
-    eprintln!("Baseline shows O(T) scaling due to cache line contention");
-    eprintln!("Nexus shows O(log T) scaling due to hierarchical aggregation\n");
+    eprintln!("Baseline (Flat): O(T) scan grows linearly with participant count");
+    eprintln!("Nexus (Hierarchical): O(log T) tree read grows logarithmically");
     
-
     // Export to CSV file
     export_csv(&all_results);
 }
 
-/// Baseline: All threads compete to CAS a single shared atomic
-/// 
-/// This creates maximum cache coherence traffic (bus storms) as all cores
-/// fight over the same cache line. Simulates O(T) coordination cost.
-fn run_flat_cas_benchmark(num_threads: usize) -> BenchResult {
-    let shared_epoch = Arc::new(AtomicU64::new(0));
-    let barrier = Arc::new(Barrier::new(num_threads));
-    let start_flag = Arc::new(AtomicBool::new(false));
-    let total_ops = Arc::new(AtomicU64::new(0));
+/// Baseline: Flat epoch collector with O(T) global minimum query
+fn run_flat_benchmark(num_participants: usize) -> BenchResult {
+    let collector = FlatEpochCollector::new(num_participants);
     
-    let mut handles = Vec::with_capacity(num_threads);
-    
-    for _ in 0..num_threads {
-        let epoch = shared_epoch.clone();
-        let bar = barrier.clone();
-        let start = start_flag.clone();
-        let ops_counter = total_ops.clone();
-        
-        handles.push(thread::spawn(move || {
-            // Wait for all threads to be ready
-            bar.wait();
-            
-            // Spin until start signal
-            while !start.load(Ordering::Acquire) {
-                std::hint::spin_loop();
-            }
-            
-            let mut local_ops = 0u64;
-            let mut success_count = 0u64;
-            
-            // Heavy CAS contention loop
-            for _ in 0..OPS_PER_THREAD {
-                // Try to increment the shared epoch via CAS
-                // This triggers cache-to-cache transfers every time
-                let current = epoch.load(Ordering::Relaxed);
-                match epoch.compare_exchange_weak(
-                    current,
-                    current.wrapping_add(1),
-                    Ordering::SeqCst,
-                    Ordering::Relaxed,
-                ) {
-                    Ok(_) => success_count += 1,
-                    Err(_) => {
-                        // CAS failed due to contention, still counts as work
-                    }
-                }
-                local_ops += 1;
-            }
-            
-            ops_counter.fetch_add(local_ops, Ordering::Relaxed);
-            success_count
-        }));
+    // Setup: Register all participants with varying epochs
+    for i in 0..num_participants {
+        // Assign epochs 1, 2, 3, ... so minimum is always 1
+        collector.set_epoch(i, (i + 1) as u64);
     }
     
-    // Start timing
-    let start_time = Instant::now();
-    start_flag.store(true, Ordering::Release);
-    
-    // Wait for all threads to complete
-    let mut total_successes = 0u64;
-    for h in handles {
-        total_successes += h.join().unwrap();
+    // Warmup
+    for _ in 0..1000 {
+        std::hint::black_box(collector.global_minimum());
     }
     
-    let elapsed = start_time.elapsed();
-    let total_ops_done = total_ops.load(Ordering::Relaxed);
-    let elapsed_ns = elapsed.as_nanos() as u64;
+    // Measurement: Time global_minimum() queries
+    let start = Instant::now();
+    let mut sum = 0u64;
+    
+    for _ in 0..QUERIES_PER_MEASUREMENT {
+        sum = sum.wrapping_add(collector.global_minimum());
+    }
+    
+    let elapsed = start.elapsed();
+    std::hint::black_box(sum); // Prevent optimization
+    
+    let total_ops = QUERIES_PER_MEASUREMENT as u64;
+    let elapsed_ns = elapsed.as_nanos() as f64;
     
     BenchResult {
         bench_type: "baseline",
-        threads: num_threads,
-        total_ops: total_ops_done,
-        total_time_ns: elapsed_ns,
-        avg_latency_ns: elapsed_ns as f64 / total_ops_done as f64,
-        throughput_mops: (total_ops_done as f64 / 1_000_000.0) / elapsed.as_secs_f64(),
+        threads: num_participants,
+        total_ops,
+        avg_latency_ns: elapsed_ns / total_ops as f64,
+        throughput_mops: (total_ops as f64 / 1_000_000.0) / elapsed.as_secs_f64(),
     }
 }
 
-/// Nexus: Threads update their local leaf nodes in the hierarchical tree
-/// 
-/// Each thread updates its own dedicated leaf, with changes propagating
-/// upward through the aggregation tree. This distributes contention and
-/// achieves O(log T) coordination cost.
-fn run_hierarchical_benchmark(num_threads: usize) -> BenchResult {
-    // Create hierarchical epoch with sufficient capacity
-    let capacity = num_threads.next_power_of_two().max(4);
-    let hier_epoch = Arc::new(HierarchicalEpoch::new(capacity));
-    let barrier = Arc::new(Barrier::new(num_threads));
-    let start_flag = Arc::new(AtomicBool::new(false));
-    let total_ops = Arc::new(AtomicU64::new(0));
+/// Nexus: Hierarchical epoch with O(log T) global minimum query
+fn run_hierarchical_benchmark(num_participants: usize) -> BenchResult {
+    let capacity = num_participants.next_power_of_two().max(4);
+    let hier_epoch = HierarchicalEpoch::new(capacity);
     
-    let mut handles = Vec::with_capacity(num_threads);
-    
-    for tid in 0..num_threads {
-        let hier = hier_epoch.clone();
-        let bar = barrier.clone();
-        let start = start_flag.clone();
-        let ops_counter = total_ops.clone();
-        
-        handles.push(thread::spawn(move || {
-            // Wait for all threads to be ready
-            bar.wait();
-            
-            // Spin until start signal
-            while !start.load(Ordering::Acquire) {
-                std::hint::spin_loop();
-            }
-            
-            let mut local_epoch = 1u64;
-            let mut local_ops = 0u64;
-            
-            // Update local leaf node in hierarchical tree
-            // This triggers O(log T) propagation through ancestors
-            for _ in 0..OPS_PER_THREAD {
-                // Update this thread's local epoch
-                // Internally, this updates leaf[tid] and propagates upward
-                hier.update_local(tid, local_epoch);
-                
-                local_epoch = local_epoch.wrapping_add(1);
-                local_ops += 1;
-            }
-            
-            ops_counter.fetch_add(local_ops, Ordering::Relaxed);
-        }));
+    // Setup: Register all participants with varying epochs
+    for i in 0..num_participants {
+        // Assign epochs 1, 2, 3, ... so minimum is always 1
+        hier_epoch.update_local(i, (i + 1) as u64);
     }
     
-    // Start timing
-    let start_time = Instant::now();
-    start_flag.store(true, Ordering::Release);
-    
-    // Wait for all threads to complete
-    for h in handles {
-        h.join().unwrap();
+    // Warmup
+    for _ in 0..1000 {
+        std::hint::black_box(hier_epoch.global_minimum());
     }
     
-    let elapsed = start_time.elapsed();
-    let total_ops_done = total_ops.load(Ordering::Relaxed);
-    let elapsed_ns = elapsed.as_nanos() as u64;
+    // Measurement: Time global_minimum() queries
+    let start = Instant::now();
+    let mut sum = 0u64;
+    
+    for _ in 0..QUERIES_PER_MEASUREMENT {
+        sum = sum.wrapping_add(hier_epoch.global_minimum());
+    }
+    
+    let elapsed = start.elapsed();
+    std::hint::black_box(sum); // Prevent optimization
+    
+    let total_ops = QUERIES_PER_MEASUREMENT as u64;
+    let elapsed_ns = elapsed.as_nanos() as f64;
     
     BenchResult {
         bench_type: "nexus",
-        threads: num_threads,
-        total_ops: total_ops_done,
-        total_time_ns: elapsed_ns,
-        avg_latency_ns: elapsed_ns as f64 / total_ops_done as f64,
-        throughput_mops: (total_ops_done as f64 / 1_000_000.0) / elapsed.as_secs_f64(),
-    }
-}
-
-/// Additional benchmark: Interleaved read-write contention
-/// 
-/// Mixed workload where threads alternate between updating local epochs
-/// and querying the global minimum. This simulates realistic usage patterns.
-#[allow(dead_code)]
-fn run_mixed_workload_benchmark(num_threads: usize) -> BenchResult {
-    let capacity = num_threads.next_power_of_two().max(4);
-    let hier_epoch = Arc::new(HierarchicalEpoch::new(capacity));
-    let barrier = Arc::new(Barrier::new(num_threads));
-    let start_flag = Arc::new(AtomicBool::new(false));
-    let total_ops = Arc::new(AtomicU64::new(0));
-    
-    let mut handles = Vec::with_capacity(num_threads);
-    
-    for tid in 0..num_threads {
-        let hier = hier_epoch.clone();
-        let bar = barrier.clone();
-        let start = start_flag.clone();
-        let ops_counter = total_ops.clone();
-        
-        handles.push(thread::spawn(move || {
-            bar.wait();
-            
-            while !start.load(Ordering::Acquire) {
-                std::hint::spin_loop();
-            }
-            
-            let mut local_epoch = 1u64;
-            let mut local_ops = 0u64;
-            let mut global_min_sum = 0u64;  // Prevent optimization
-            
-            for i in 0..OPS_PER_THREAD {
-                // 75% writes, 25% reads (realistic ratio)
-                if i % 4 != 0 {
-                    hier.update_local(tid, local_epoch);
-                    local_epoch = local_epoch.wrapping_add(1);
-                } else {
-                    global_min_sum = global_min_sum.wrapping_add(hier.global_minimum());
-                }
-                local_ops += 1;
-            }
-            
-            ops_counter.fetch_add(local_ops, Ordering::Relaxed);
-            global_min_sum  // Return to prevent optimization
-        }));
-    }
-    
-    let start_time = Instant::now();
-    start_flag.store(true, Ordering::Release);
-    
-    let mut _sum = 0u64;
-    for h in handles {
-        _sum = _sum.wrapping_add(h.join().unwrap());
-    }
-    
-    let elapsed = start_time.elapsed();
-    let total_ops_done = total_ops.load(Ordering::Relaxed);
-    let elapsed_ns = elapsed.as_nanos() as u64;
-    
-    BenchResult {
-        bench_type: "nexus_mixed",
-        threads: num_threads,
-        total_ops: total_ops_done,
-        total_time_ns: elapsed_ns,
-        avg_latency_ns: elapsed_ns as f64 / total_ops_done as f64,
-        throughput_mops: (total_ops_done as f64 / 1_000_000.0) / elapsed.as_secs_f64(),
+        threads: num_participants,
+        total_ops,
+        avg_latency_ns: elapsed_ns / total_ops as f64,
+        throughput_mops: (total_ops as f64 / 1_000_000.0) / elapsed.as_secs_f64(),
     }
 }
 
