@@ -19,10 +19,13 @@
 //! - More consistent garbage collection timing
 //! - Comparable or lower memory overhead
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::thread;
+
+// Use the actual crossbeam-epoch crate for credible comparison
+use crossbeam_epoch::{self as cb_epoch, Collector, Guard, Owned};
 
 /// Configuration for benchmarks
 const WARMUP_ITERATIONS: usize = 1000;
@@ -56,71 +59,80 @@ impl BenchmarkResult {
     }
 }
 
-/// Simulated Crossbeam-style flat epoch implementation for comparison
-mod crossbeam_baseline {
+/// Wrapper for crossbeam-epoch benchmarking
+/// 
+/// Uses the actual crossbeam_epoch::Collector to measure real-world
+/// performance of Crossbeam's flat epoch advancement.
+mod crossbeam_real {
     use super::*;
     
-    const MAX_PARTICIPANTS: usize = 256;
-    const INACTIVE: u64 = u64::MAX;
-    
-    /// Flat epoch collector (Crossbeam-style)
-    pub struct FlatEpochCollector {
-        global_epoch: AtomicU64,
-        participants: Box<[AtomicU64; MAX_PARTICIPANTS]>,
-        num_participants: AtomicU64,
+    /// Benchmark crossbeam-epoch pin/advance cycle
+    /// 
+    /// Crossbeam triggers epoch advancement checks internally during pin().
+    /// This measures the cost of that O(T) scan in practice.
+    pub struct CrossbeamBenchmark {
+        collector: Collector,
+        handle_count: AtomicUsize,
     }
     
-    impl FlatEpochCollector {
+    impl CrossbeamBenchmark {
         pub fn new() -> Self {
-            let participants = Box::new([(); MAX_PARTICIPANTS].map(|_| AtomicU64::new(INACTIVE)));
             Self {
-                global_epoch: AtomicU64::new(0),
-                participants,
-                num_participants: AtomicU64::new(0),
+                collector: Collector::new(),
+                handle_count: AtomicUsize::new(0),
             }
         }
         
-        /// Pin the current thread - O(1) operation
-        pub fn pin(&self, participant_id: usize) -> u64 {
-            let epoch = self.global_epoch.load(Ordering::SeqCst);
-            self.participants[participant_id].store(epoch, Ordering::SeqCst);
-            epoch
+        /// Simulate a participant by creating a local handle
+        pub fn register(&self) -> cb_epoch::LocalHandle {
+            self.handle_count.fetch_add(1, Ordering::Relaxed);
+            self.collector.register()
         }
         
-        /// Unpin the current thread - O(1) operation
-        pub fn unpin(&self, participant_id: usize) {
-            self.participants[participant_id].store(INACTIVE, Ordering::SeqCst);
+        /// Measure the cost of pin + epoch advancement trigger
+        /// 
+        /// When a guard is pinned, crossbeam internally checks if the epoch
+        /// can be advanced by scanning all participants - this is O(T).
+        pub fn pin_and_trigger_advance(&self, handle: &cb_epoch::LocalHandle) -> Guard<'_> {
+            handle.pin()
         }
         
-        /// Try to advance the global epoch - O(T) operation
-        /// This is where Crossbeam's flat approach has higher overhead
-        pub fn try_advance(&self) -> bool {
-            let current = self.global_epoch.load(Ordering::SeqCst);
-            let num_parts = self.num_participants.load(Ordering::Relaxed) as usize;
+        /// Force garbage collection which triggers epoch advancement
+        pub fn flush(&self, guard: &Guard<'_>) {
+            guard.flush();
+        }
+        
+        /// Measure raw pin/unpin cycle
+        pub fn measure_pin_cycle(&self, handle: &cb_epoch::LocalHandle) -> Duration {
+            let start = Instant::now();
+            let guard = handle.pin();
+            drop(guard);
+            start.elapsed()
+        }
+        
+        /// Measure epoch advancement by deferring work and collecting
+        /// This triggers the O(T) participant scan in crossbeam
+        pub fn measure_advance_cycle(&self, handle: &cb_epoch::LocalHandle) -> Duration {
+            let guard = handle.pin();
             
-            // Must scan ALL participants - O(T) complexity
-            for i in 0..num_parts {
-                let p_epoch = self.participants[i].load(Ordering::SeqCst);
-                if p_epoch != INACTIVE && p_epoch < current {
-                    return false;
-                }
+            // Defer some work to trigger epoch advancement on next collect
+            unsafe {
+                guard.defer_unchecked(|| {
+                    // Dummy deferred action
+                    std::hint::black_box(());
+                });
             }
             
-            // All participants caught up, advance
-            self.global_epoch
-                .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-        }
-        
-        /// Register a new participant
-        pub fn register(&self) -> usize {
-            let id = self.num_participants.fetch_add(1, Ordering::Relaxed) as usize;
-            assert!(id < MAX_PARTICIPANTS);
-            id
+            let start = Instant::now();
+            guard.flush();  // This triggers epoch advancement check (O(T))
+            let elapsed = start.elapsed();
+            
+            drop(guard);
+            elapsed
         }
     }
     
-    impl Default for FlatEpochCollector {
+    impl Default for CrossbeamBenchmark {
         fn default() -> Self {
             Self::new()
         }
@@ -240,33 +252,45 @@ mod nexus_baseline {
     }
 }
 
-/// Run benchmarks
+/// Run benchmarks comparing actual crossbeam-epoch vs Nexus hierarchical approach
 pub fn run_benchmarks() -> Vec<BenchmarkResult> {
     let mut results = vec![];
     
-    println!("Crossbeam vs Nexus Epoch Benchmarks");
-    println!("===================================\n");
+    println!("Crossbeam-Epoch (Real) vs Nexus Hierarchical Epoch Benchmarks");
+    println!("==============================================================\n");
+    println!("Note: Using actual crossbeam_epoch crate v0.9 for credible comparison\n");
     
     for &thread_count in THREAD_COUNTS {
         println!("Thread count: {}", thread_count);
         
-        // Crossbeam advance benchmark
-        let collector = Arc::new(crossbeam_baseline::FlatEpochCollector::new());
-        for _ in 0..thread_count {
-            collector.register();
+        // --- Crossbeam-epoch benchmark (real crate) ---
+        let cb_bench = Arc::new(crossbeam_real::CrossbeamBenchmark::new());
+        
+        // Register participants (create handles)
+        let handles: Vec<_> = (0..thread_count)
+            .map(|_| cb_bench.register())
+            .collect();
+        
+        // Warmup
+        for _ in 0..WARMUP_ITERATIONS {
+            let guard = handles[0].pin();
+            guard.flush();
+            drop(guard);
         }
         
+        // Measure crossbeam epoch advancement cost
+        // This measures the O(T) scan that crossbeam does internally
         let mut latencies = Vec::with_capacity(BENCHMARK_ITERATIONS);
-        for _ in 0..BENCHMARK_ITERATIONS {
-            let start = Instant::now();
-            let _ = collector.try_advance();
-            latencies.push(start.elapsed().as_nanos() as f64);
+        for i in 0..BENCHMARK_ITERATIONS {
+            let handle = &handles[i % handles.len()];
+            let elapsed = cb_bench.measure_advance_cycle(handle);
+            latencies.push(elapsed.as_nanos() as f64);
         }
         
         latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mean = latencies.iter().sum::<f64>() / latencies.len() as f64;
         
-        println!("  Crossbeam advance: {:.2} ns (O(T) = O({}))", mean, thread_count);
+        println!("  Crossbeam-epoch advance: {:.2} ns (O(T) = O({}))", mean, thread_count);
         results.push(BenchmarkResult {
             name: "crossbeam_advance".to_string(),
             thread_count,
@@ -277,10 +301,15 @@ pub fn run_benchmarks() -> Vec<BenchmarkResult> {
             throughput_ops_per_sec: 1e9 / mean,
         });
         
-        // Nexus advance benchmark
+        // --- Nexus hierarchical benchmark ---
         let collector = Arc::new(nexus_baseline::HierarchicalEpochCollector::new());
         for _ in 0..thread_count {
             collector.register();
+        }
+        
+        // Warmup
+        for _ in 0..WARMUP_ITERATIONS {
+            let _ = collector.try_advance();
         }
         
         let mut latencies = Vec::with_capacity(BENCHMARK_ITERATIONS);
@@ -296,6 +325,67 @@ pub fn run_benchmarks() -> Vec<BenchmarkResult> {
         println!("  Nexus advance: {:.2} ns (O(log T) = O({}))", mean, (thread_count as f64).log2().ceil() as usize);
         results.push(BenchmarkResult {
             name: "nexus_advance".to_string(),
+            thread_count,
+            mean_latency_ns: mean,
+            p50_latency_ns: latencies[latencies.len() / 2],
+            p99_latency_ns: latencies[(latencies.len() as f64 * 0.99) as usize],
+            p999_latency_ns: latencies[(latencies.len() as f64 * 0.999) as usize],
+            throughput_ops_per_sec: 1e9 / mean,
+        });
+        
+        println!();
+    }
+    
+    // Additional benchmark: Pin/unpin latency comparison
+    println!("\n--- Pin/Unpin Latency Comparison ---\n");
+    
+    for &thread_count in &[4, 16, 64] {
+        println!("Thread count: {}", thread_count);
+        
+        // Crossbeam pin/unpin
+        let cb_bench = crossbeam_real::CrossbeamBenchmark::new();
+        let handles: Vec<_> = (0..thread_count).map(|_| cb_bench.register()).collect();
+        
+        let mut latencies = Vec::with_capacity(BENCHMARK_ITERATIONS);
+        for i in 0..BENCHMARK_ITERATIONS {
+            let handle = &handles[i % handles.len()];
+            let elapsed = cb_bench.measure_pin_cycle(handle);
+            latencies.push(elapsed.as_nanos() as f64);
+        }
+        
+        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mean = latencies.iter().sum::<f64>() / latencies.len() as f64;
+        println!("  Crossbeam pin/unpin: {:.2} ns", mean);
+        
+        results.push(BenchmarkResult {
+            name: "crossbeam_pin".to_string(),
+            thread_count,
+            mean_latency_ns: mean,
+            p50_latency_ns: latencies[latencies.len() / 2],
+            p99_latency_ns: latencies[(latencies.len() as f64 * 0.99) as usize],
+            p999_latency_ns: latencies[(latencies.len() as f64 * 0.999) as usize],
+            throughput_ops_per_sec: 1e9 / mean,
+        });
+        
+        // Nexus pin/unpin
+        let collector = nexus_baseline::HierarchicalEpochCollector::new();
+        let ids: Vec<_> = (0..thread_count).map(|_| collector.register()).collect();
+        
+        let mut latencies = Vec::with_capacity(BENCHMARK_ITERATIONS);
+        for i in 0..BENCHMARK_ITERATIONS {
+            let id = ids[i % ids.len()];
+            let start = Instant::now();
+            collector.pin(id);
+            collector.unpin(id);
+            latencies.push(start.elapsed().as_nanos() as f64);
+        }
+        
+        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mean = latencies.iter().sum::<f64>() / latencies.len() as f64;
+        println!("  Nexus pin/unpin: {:.2} ns", mean);
+        
+        results.push(BenchmarkResult {
+            name: "nexus_pin".to_string(),
             thread_count,
             mean_latency_ns: mean,
             p50_latency_ns: latencies[latencies.len() / 2],
