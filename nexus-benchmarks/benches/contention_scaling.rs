@@ -55,8 +55,8 @@ impl BenchResult {
 }
 
 fn main() {
-    println!("Contention Scaling Benchmark: Flat vs Hierarchical Epoch");
-    println!("=========================================================\n");
+    eprintln!("Contention Scaling Benchmark: Flat vs Hierarchical Epoch");
+    eprintln!("=========================================================\n");
     println!("type,threads,ops,latency_ns,throughput_mops");
     
     let mut all_results = Vec::new();
@@ -73,11 +73,12 @@ fn main() {
         all_results.push(nexus_result);
     }
     
-    // Summary report
-    println!("\n--- Summary ---");
-    println!("Baseline shows O(T) scaling due to cache line contention");
-    println!("Nexus shows O(log T) scaling due to hierarchical aggregation\n");
+    // Summary report (to stderr so it doesn't pollute CSV)
+    eprintln!("\n--- Summary ---");
+    eprintln!("Baseline shows O(T) scaling due to cache line contention");
+    eprintln!("Nexus shows O(log T) scaling due to hierarchical aggregation\n");
     
+
     // Export to CSV file
     export_csv(&all_results);
 }
