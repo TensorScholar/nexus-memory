@@ -71,6 +71,10 @@ harness = false
 name = "contention_scaling"
 harness = false
 
+[[bench]]
+name = "straggler_stress"
+harness = false
+
 [features]
 default = []
 full = ["rapl"]
