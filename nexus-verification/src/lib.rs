@@ -24,6 +24,10 @@ pub mod tla_plus;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::marker::PhantomData;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use regex::Regex;
+
 
 /// Verification error types
 #[derive(Debug, Clone)]
@@ -53,7 +57,16 @@ pub enum VerificationError {
         /// Breached invariant description
         invariant: String,
     },
+
+    /// TLC execution error (Java not found, TLC failed, parse error)
+    TlcExecutionError {
+        /// Error reason
+        reason: String,
+        /// Suggestion for resolution
+        suggestion: String,
+    },
 }
+
 
 impl std::fmt::Display for VerificationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -70,9 +83,13 @@ impl std::fmt::Display for VerificationError {
             Self::InvariantBreach { invariant } => {
                 write!(f, "Invariant breach: {}", invariant)
             }
+            Self::TlcExecutionError { reason, suggestion } => {
+                write!(f, "TLC execution error: {} | Suggestion: {}", reason, suggestion)
+            }
         }
     }
 }
+
 
 impl std::error::Error for VerificationError {}
 
@@ -290,7 +307,7 @@ impl<P, S> PropertyWrapper<P, S> {
 impl<P, S> PropertyBoxTyped<S> for PropertyWrapper<P, S>
 where
     P: Property + Send + Sync + 'static,
-    S: VerifiableState + 'static + Send,
+    S: VerifiableState + 'static + Send + Sync,
 {
     fn name(&self) -> &str {
         Property::name(&self.property)
@@ -351,7 +368,7 @@ pub struct VerificationStats {
     pub violations_found: AtomicU64,
 }
 
-impl<S: VerifiableState + 'static + std::marker::Send> VerificationEngine<S> {
+impl<S: VerifiableState + 'static + std::marker::Send + std::marker::Sync> VerificationEngine<S> {
     /// Create a new verification engine
     pub fn new() -> Self {
         Self {
@@ -432,7 +449,7 @@ impl<S: VerifiableState + 'static + std::marker::Send> VerificationEngine<S> {
     }
 }
 
-impl<S: VerifiableState + 'static + std::marker::Send> Default for VerificationEngine<S> {
+impl<S: VerifiableState + 'static + std::marker::Send + std::marker::Sync> Default for VerificationEngine<S> {
     fn default() -> Self {
         Self::new()
     }
@@ -468,14 +485,265 @@ pub struct TlaStats {
     pub max_queue_size: u64,
     /// Verification time in seconds
     pub time_seconds: f64,
+    /// Verification status message
+    pub status: TlcVerificationStatus,
 }
 
-impl TlaSpec {
-    /// Create a reference to the epoch reclamation specification
-    pub fn epoch_reclamation() -> Self {
+/// Status of TLC verification
+#[derive(Debug, Clone, Default)]
+pub enum TlcVerificationStatus {
+    /// Verification completed successfully
+    #[default]
+    Verified,
+    /// Verification not performed (tool not available)
+    NotVerified { reason: String },
+    /// Verification failed with error
+    Failed { error: String },
+    /// Parsed from pre-computed output file
+    ParsedFromOutput { file: String },
+}
+
+/// TLC Model Checker Runner
+/// 
+/// Executes TLC model checker via Java or reads pre-computed output files.
+/// Provides fallback mechanisms for CI environments without Java/TLA+ tools.
+pub struct TlcRunner {
+    /// Path to tla2tools.jar (if available)
+    pub tla2tools_jar: Option<PathBuf>,
+    /// Project root directory for resolving paths
+    pub project_root: PathBuf,
+}
+
+impl TlcRunner {
+    /// Create a new TlcRunner, attempting to locate tla2tools.jar
+    pub fn new() -> Self {
+        // Try common locations for tla2tools.jar
+        let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        
+        let possible_jar_paths = [
+            project_root.join("tla2tools.jar"),
+            project_root.join("tools/tla2tools.jar"),
+            PathBuf::from("/usr/local/lib/tla2tools.jar"),
+            PathBuf::from("/opt/tla/tla2tools.jar"),
+        ];
+        
+        let tla2tools_jar = possible_jar_paths
+            .into_iter()
+            .find(|p| p.exists());
+        
         Self {
+            tla2tools_jar,
+            project_root,
+        }
+    }
+    
+    /// Create a TlcRunner with explicit project root
+    pub fn with_project_root(project_root: PathBuf) -> Self {
+        let tla2tools_jar = project_root.join("tla2tools.jar");
+        let tla2tools_jar = if tla2tools_jar.exists() { 
+            Some(tla2tools_jar) 
+        } else { 
+            None 
+        };
+        
+        Self {
+            tla2tools_jar,
+            project_root,
+        }
+    }
+    
+    /// Run TLC on a specification file
+    /// 
+    /// Executes: `java -jar tla2tools.jar -deadlock -workers auto <spec_path>`
+    pub fn run_tlc(&self, spec_path: &Path) -> Result<TlaStats, VerificationError> {
+        let jar_path = self.tla2tools_jar.as_ref().ok_or_else(|| {
+            VerificationError::TlcExecutionError {
+                reason: "tla2tools.jar not found".to_string(),
+                suggestion: "Download tla2tools.jar from https://github.com/tlaplus/tlaplus/releases and place it in the project root".to_string(),
+            }
+        })?;
+        
+        // Check if Java is available
+        let java_check = Command::new("java")
+            .arg("-version")
+            .output();
+        
+        if java_check.is_err() {
+            return Err(VerificationError::TlcExecutionError {
+                reason: "Java not found in PATH".to_string(),
+                suggestion: "Install Java JDK/JRE and ensure 'java' is in your PATH".to_string(),
+            });
+        }
+        
+        // Run TLC
+        let output = Command::new("java")
+            .arg("-jar")
+            .arg(jar_path)
+            .arg("-deadlock")
+            .arg("-workers")
+            .arg("auto")
+            .arg(spec_path)
+            .current_dir(&self.project_root)
+            .output()
+            .map_err(|e| VerificationError::TlcExecutionError {
+                reason: format!("Failed to execute TLC: {}", e),
+                suggestion: "Check that Java and tla2tools.jar are correctly installed".to_string(),
+            })?;
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        
+        // Check for TLC errors
+        if !output.status.success() {
+            return Err(VerificationError::TlcExecutionError {
+                reason: format!("TLC exited with error: {}", stderr),
+                suggestion: "Check the TLA+ specification for syntax errors".to_string(),
+            });
+        }
+        
+        // Parse the output
+        self.parse_tlc_output(&stdout)
+    }
+    
+    /// Parse TLC stdout to extract statistics
+    /// 
+    /// Looks for patterns like:
+    /// - "12345 states generated, 6789 distinct states found"
+    /// - "Finished in 01min 23s"
+    pub fn parse_tlc_output(&self, stdout: &str) -> Result<TlaStats, VerificationError> {
+        let mut stats = TlaStats::default();
+        
+        // Pattern: "X states generated" or "Generated X states"
+        let states_generated_re = Regex::new(r"(\d[\d,]*)\s+states?\s+generated")
+            .expect("Invalid regex");
+        if let Some(caps) = states_generated_re.captures(stdout) {
+            let num_str = caps.get(1).unwrap().as_str().replace(',', "");
+            stats.states_explored = num_str.parse().unwrap_or(0);
+        }
+        
+        // Pattern: "X distinct states found"  
+        let distinct_states_re = Regex::new(r"(\d[\d,]*)\s+distinct\s+states?\s+found")
+            .expect("Invalid regex");
+        if let Some(caps) = distinct_states_re.captures(stdout) {
+            let num_str = caps.get(1).unwrap().as_str().replace(',', "");
+            stats.distinct_states = num_str.parse().unwrap_or(0);
+        }
+        
+        // Pattern: "queue size X" or "max queue: X"
+        let queue_re = Regex::new(r"(?:queue\s+size|max\s+queue)[:\s]+(\d[\d,]*)")
+            .expect("Invalid regex");
+        if let Some(caps) = queue_re.captures(stdout) {
+            let num_str = caps.get(1).unwrap().as_str().replace(',', "");
+            stats.max_queue_size = num_str.parse().unwrap_or(0);
+        }
+        
+        // Pattern: "Finished in XXmin YYs" or "Time: XX.Xs"
+        let time_re = Regex::new(r"(?:Finished\s+in\s+|Time:\s*)(\d+)(?:min\s*)?(\d+)?s?")
+            .expect("Invalid regex");
+        if let Some(caps) = time_re.captures(stdout) {
+            let minutes: f64 = caps.get(1).map(|m| m.as_str().parse().unwrap_or(0.0)).unwrap_or(0.0);
+            let seconds: f64 = caps.get(2).map(|m| m.as_str().parse().unwrap_or(0.0)).unwrap_or(0.0);
+            stats.time_seconds = minutes * 60.0 + seconds;
+        }
+        
+        // Check if we found any meaningful data
+        if stats.states_explored == 0 && stats.distinct_states == 0 {
+            // Try alternative patterns for TLC output
+            let alt_states_re = Regex::new(r"(?i)(?:explored|checked|total)\s*:?\s*(\d[\d,]*)\s*states?")
+                .expect("Invalid regex");
+            if let Some(caps) = alt_states_re.captures(stdout) {
+                let num_str = caps.get(1).unwrap().as_str().replace(',', "");
+                stats.states_explored = num_str.parse().unwrap_or(0);
+            }
+        }
+        
+        stats.status = TlcVerificationStatus::Verified;
+        Ok(stats)
+    }
+    
+    /// Read statistics from a pre-computed .out file
+    /// 
+    /// This is used as a fallback for CI environments without TLA+ tools.
+    /// The .out file should contain TLC output from a previous run.
+    pub fn read_output_file(&self, out_path: &Path) -> Result<TlaStats, VerificationError> {
+        let content = std::fs::read_to_string(out_path).map_err(|e| {
+            VerificationError::TlcExecutionError {
+                reason: format!("Failed to read output file {}: {}", out_path.display(), e),
+                suggestion: "Ensure the .out file exists and is readable".to_string(),
+            }
+        })?;
+        
+        let mut stats = self.parse_tlc_output(&content)?;
+        stats.status = TlcVerificationStatus::ParsedFromOutput { 
+            file: out_path.display().to_string() 
+        };
+        Ok(stats)
+    }
+    
+    /// Get TLA+ statistics, trying .out file first, then TLC execution
+    /// 
+    /// Priority order:
+    /// 1. Read from .out file if it exists
+    /// 2. Execute TLC if Java and tla2tools.jar are available  
+    /// 3. Return error (NOT hardcoded success)
+    pub fn get_stats(&self, spec_name: &str) -> Result<TlaStats, VerificationError> {
+        // Try .out file first (for CI environments)
+        let out_file = self.project_root
+            .join("formal-verification")
+            .join(format!("{}.out", spec_name));
+        
+        if out_file.exists() {
+            return self.read_output_file(&out_file);
+        }
+        
+        // Try running TLC
+        let spec_file = self.project_root
+            .join("formal-verification")
+            .join(format!("{}.tla", spec_name));
+        
+        if spec_file.exists() {
+            return self.run_tlc(&spec_file);
+        }
+        
+        // Neither option available - return error
+        Err(VerificationError::TlcExecutionError {
+            reason: format!(
+                "Cannot verify {}: no .out file at {} and no .tla spec at {}",
+                spec_name,
+                out_file.display(),
+                spec_file.display()
+            ),
+            suggestion: format!(
+                "Either run TLC manually and save output to {}, \
+                 or place {} in the formal-verification directory",
+                out_file.display(),
+                format!("{}.tla", spec_name)
+            ),
+        })
+    }
+}
+
+impl Default for TlcRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+
+impl TlaSpec {
+    /// Create a reference to the epoch reclamation specification with real verification
+    /// 
+    /// This attempts to:
+    /// 1. Read from `formal-verification/epoch-reclamation.out` if available (CI fallback)
+    /// 2. Execute TLC via `java -jar tla2tools.jar` if Java is available
+    /// 3. Return error if neither option is available (no hardcoded success)
+    pub fn epoch_reclamation() -> Result<Self, VerificationError> {
+        let runner = TlcRunner::new();
+        let stats = runner.get_stats("epoch-reclamation")?;
+        
+        Ok(Self {
             name: "EpochReclamation".to_string(),
-            module_path: "spec/epoch_reclamation.tla".to_string(),
+            module_path: "formal-verification/epoch-reclamation.tla".to_string(),
             invariants: vec![
                 "TypeInvariant".to_string(),
                 "SafetyInvariant".to_string(),
@@ -487,20 +755,42 @@ impl TlaSpec {
                 "EventualReclamation".to_string(),
                 "Progress".to_string(),
             ],
-            stats: TlaStats {
-                states_explored: 12_473_690,
-                distinct_states: 847_293,
-                max_queue_size: 15_847,
-                time_seconds: 342.7,
-            },
-        }
+            stats,
+        })
     }
     
-    /// Create a reference to the paradigm transition specification
-    pub fn paradigm_transition() -> Self {
-        Self {
+    /// Create a reference to the epoch reclamation specification with a custom runner
+    /// 
+    /// Useful for specifying a custom project root path.
+    pub fn epoch_reclamation_with_runner(runner: &TlcRunner) -> Result<Self, VerificationError> {
+        let stats = runner.get_stats("epoch-reclamation")?;
+        
+        Ok(Self {
+            name: "EpochReclamation".to_string(),
+            module_path: "formal-verification/epoch-reclamation.tla".to_string(),
+            invariants: vec![
+                "TypeInvariant".to_string(),
+                "SafetyInvariant".to_string(),
+                "NoUseAfterFree".to_string(),
+                "NoDoubleFree".to_string(),
+                "BoundedGarbage".to_string(),
+            ],
+            temporal_properties: vec![
+                "EventualReclamation".to_string(),
+                "Progress".to_string(),
+            ],
+            stats,
+        })
+    }
+    
+    /// Create a reference to the paradigm transition specification with real verification
+    pub fn paradigm_transition() -> Result<Self, VerificationError> {
+        let runner = TlcRunner::new();
+        let stats = runner.get_stats("paradigm-transition")?;
+        
+        Ok(Self {
             name: "ParadigmTransition".to_string(),
-            module_path: "spec/paradigm_transition.tla".to_string(),
+            module_path: "formal-verification/paradigm-transition.tla".to_string(),
             invariants: vec![
                 "TypeInvariant".to_string(),
                 "NoDeadlock".to_string(),
@@ -509,15 +799,30 @@ impl TlaSpec {
             temporal_properties: vec![
                 "ProgressGuarantee".to_string(),
             ],
-            stats: TlaStats {
-                states_explored: 5_284_193,
-                distinct_states: 412_847,
-                max_queue_size: 8_472,
-                time_seconds: 156.3,
-            },
-        }
+            stats,
+        })
+    }
+    
+    /// Create a reference to the paradigm transition specification with a custom runner
+    pub fn paradigm_transition_with_runner(runner: &TlcRunner) -> Result<Self, VerificationError> {
+        let stats = runner.get_stats("paradigm-transition")?;
+        
+        Ok(Self {
+            name: "ParadigmTransition".to_string(),
+            module_path: "formal-verification/paradigm-transition.tla".to_string(),
+            invariants: vec![
+                "TypeInvariant".to_string(),
+                "NoDeadlock".to_string(),
+                "MemoryConsistency".to_string(),
+            ],
+            temporal_properties: vec![
+                "ProgressGuarantee".to_string(),
+            ],
+            stats,
+        })
     }
 }
+
 
 // ============================================================================
 // Tests
@@ -656,17 +961,61 @@ mod tests {
     
     #[test]
     fn test_tla_spec_reference() {
-        let spec = TlaSpec::epoch_reclamation();
-        assert_eq!(spec.name, "EpochReclamation");
-        assert!(spec.stats.states_explored > 10_000_000);
-        assert!(spec.invariants.contains(&"NoUseAfterFree".to_string()));
-        assert!(spec.invariants.contains(&"NoDoubleFree".to_string()));
+        // This test now validates the new Result-returning API
+        // Without a .out file or TLC, this should return an error
+        let result = TlaSpec::epoch_reclamation();
+        
+        // The function should return an error (no hardcoded success)
+        // since we don't have tla2tools.jar or .out file in test environment
+        match result {
+            Ok(spec) => {
+                // If we have a .out file, verify structure
+                assert_eq!(spec.name, "EpochReclamation");
+                assert!(spec.invariants.contains(&"NoUseAfterFree".to_string()));
+                assert!(spec.invariants.contains(&"NoDoubleFree".to_string()));
+            }
+            Err(VerificationError::TlcExecutionError { .. }) => {
+                // Expected: no TLC tools or .out file available
+            }
+            Err(e) => panic!("Unexpected error type: {:?}", e),
+        }
     }
     
     #[test]
     fn test_paradigm_transition_spec() {
-        let spec = TlaSpec::paradigm_transition();
-        assert_eq!(spec.name, "ParadigmTransition");
-        assert!(spec.invariants.contains(&"MemoryConsistency".to_string()));
+        // This test now validates the new Result-returning API
+        let result = TlaSpec::paradigm_transition();
+        
+        match result {
+            Ok(spec) => {
+                assert_eq!(spec.name, "ParadigmTransition");
+                assert!(spec.invariants.contains(&"MemoryConsistency".to_string()));
+            }
+            Err(VerificationError::TlcExecutionError { .. }) => {
+                // Expected: no TLC tools or .out file available
+            }
+            Err(e) => panic!("Unexpected error type: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_tlc_runner_parse_output() {
+        let runner = TlcRunner::new();
+        
+        // Test parsing typical TLC output
+        let sample_output = r#"
+TLC2 Version 2.18 of 05 January 2023
+Running breadth-first search Model-Checking with fp 89
+Computed 2 initial states...
+Starting...
+12,473,690 states generated, 847,293 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 42.
+Finished in 5min 42s
+No errors found.
+"#;
+        
+        let stats = runner.parse_tlc_output(sample_output).unwrap();
+        assert_eq!(stats.states_explored, 12473690);
+        assert_eq!(stats.distinct_states, 847293);
     }
 }

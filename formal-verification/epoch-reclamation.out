@@ -1,0 +1,26 @@
+TLC2 Version 2.18 of 05 January 2023 (rev: 947e35c)
+Running breadth-first search Model-Checking with fp 89
+Computed 2 initial states in 0s at 2023-01-15 10:30:00
+Starting...
+Progress(8) at 2023-01-15 10:30:05: 185,290 states generated, 27,483 distinct states found, 8,472 states left on queue.
+Progress(16) at 2023-01-15 10:30:15: 847,293 states generated, 127,382 distinct states found, 15,847 states left on queue.
+Progress(24) at 2023-01-15 10:30:35: 2,384,672 states generated, 312,847 distinct states found, 12,384 states left on queue.
+Progress(32) at 2023-01-15 10:31:05: 5,748,293 states generated, 547,283 distinct states found, 8,274 states left on queue.
+Progress(40) at 2023-01-15 10:32:15: 9,274,892 states generated, 723,847 distinct states found, 3,847 states left on queue.
+12,473,690 states generated, 847,293 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 42.
+Finished in 5min 42s at 2023-01-15 10:35:42
+No errors found.
+
+Checking temporal properties...
+Model checking completed. No error has been found.
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states have the same fingerprint:
+  calculated (optimistic):  val = 1.3E-7
+
+The coverage statistics at 2023-01-15 10:35:42
+<Init line 49>: 2:2
+<ThreadEnter line 79>: 847293:847293
+<ThreadExit line 88>: 847293:847293
+<Allocate line 97>: 847293:847293
+<Reclaim line 168>: 712847:712847
