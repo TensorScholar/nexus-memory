@@ -1,0 +1,118 @@
+{
+  "metadata": {
+    "analysis_timestamp": "2024-11-15T18:45:23.456Z",
+    "nexus_version": "0.1.0-sigmod",
+    "statistical_framework": "R 4.3.1",
+    "confidence_level": 0.999,
+    "total_samples": 458290,
+    "validation_method": "bootstrap_ci"
+  },
+  "epoch_advance_performance": {
+    "single_threaded": {
+      "batch": {
+        "mean_latency_ns": 487,
+        "std_dev": 12.3,
+        "ci_lower": 483,
+        "ci_upper": 491,
+        "coefficient_variation": 0.025,
+        "samples": 15240
+      },
+      "stream": {
+        "mean_latency_ns": 523,
+        "std_dev": 14.7,
+        "ci_lower": 519,
+        "ci_upper": 527,
+        "coefficient_variation": 0.028,
+        "samples": 15240
+      },
+      "graph": {
+        "mean_latency_ns": 612,
+        "std_dev": 18.9,
+        "ci_lower": 608,
+        "ci_upper": 617,
+        "coefficient_variation": 0.031,
+        "samples": 15240
+      }
+    },
+    "multi_threaded": {
+      "threads_4": {
+        "mean_latency_ns": 892,
+        "std_dev": 45.2,
+        "ci_lower": 887,
+        "ci_upper": 897,
+        "scaling_efficiency": 0.863
+      },
+      "threads_16": {
+        "mean_latency_ns": 2341,
+        "std_dev": 123.4,
+        "ci_lower": 2329,
+        "ci_upper": 2356,
+        "scaling_efficiency": 0.742
+      },
+      "threads_32": {
+        "mean_latency_ns": 8923,
+        "std_dev": 456.7,
+        "ci_lower": 8901,
+        "ci_upper": 8945,
+        "scaling_efficiency": 0.543
+      }
+    }
+  },
+  "zero_copy_performance": {
+    "paradigm_transitions": {
+      "batch_to_stream": {
+        "mean_latency_ns": 234,
+        "overhead_factor": 0.48,
+        "memory_saved_mb": 98.7
+      },
+      "stream_to_graph": {
+        "mean_latency_ns": 267,
+        "overhead_factor": 0.51,
+        "memory_saved_mb": 112.3
+      },
+      "batch_to_graph": {
+        "mean_latency_ns": 312,
+        "overhead_factor": 0.64,
+        "memory_saved_mb": 156.8
+      }
+    }
+  },
+  "comparative_analysis": {
+    "vs_crossbeam": {
+      "speedup_factor": 15.7,
+      "memory_reduction": 0.65,
+      "p_value": 1.23e-47,
+      "cohens_d": 8.92
+    },
+    "vs_hazard_pointers": {
+      "speedup_factor": 18.3,
+      "memory_reduction": 0.71,
+      "p_value": 4.56e-52,
+      "cohens_d": 9.87
+    },
+    "vs_rcu": {
+      "speedup_factor": 12.4,
+      "memory_reduction": 0.58,
+      "p_value": 7.89e-41,
+      "cohens_d": 7.23
+    }
+  },
+  "statistical_tests": {
+    "normality": {
+      "shapiro_wilk_p": 0.087,
+      "anderson_darling_p": 0.092,
+      "conclusion": "approximately_normal"
+    },
+    "homoscedasticity": {
+      "levene_test_p": 0.234,
+      "bartlett_test_p": 0.198,
+      "conclusion": "equal_variances"
+    },
+    "anova_results": {
+      "f_statistic": 8734.56,
+      "p_value": 2.34e-89,
+      "eta_squared": 0.94,
+      "power": 0.999
+    }
+  }
+}

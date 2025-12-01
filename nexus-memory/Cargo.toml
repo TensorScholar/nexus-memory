@@ -1,0 +1,37 @@
+[package]
+name = "nexus-memory"
+version = "0.1.0"
+edition = "2021"
+authors = ["PVLDB Authors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nexus-framework/nexus-memory"
+description = "Hierarchical epoch-based memory reclamation for cross-paradigm processing"
+keywords = ["memory", "epoch", "concurrent", "lock-free", "numa"]
+categories = ["concurrency", "memory-management"]
+readme = "README.md"
+
+[features]
+default = ["std"]
+std = []
+zero-copy = []
+numa = ["std", "libc"]
+statistics = []
+libnuma = ["numa"]
+
+[dependencies]
+# Core dependencies - kept minimal for publication
+libc = { version = "0.2", optional = true }
+
+[dev-dependencies]
+criterion = "0.5"
+proptest = "1.4"
+rand = "0.8"
+
+[[bench]]
+name = "epoch_benchmark"
+harness = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+

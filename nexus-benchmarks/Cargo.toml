@@ -1,0 +1,64 @@
+[package]
+name = "nexus-benchmarks"
+version = "0.1.0"
+edition = "2021"
+authors = ["Nexus Memory Authors"]
+license = "Apache-2.0"
+repository = "https://github.com/nexus-memory/nexus"
+description = "Benchmark suite for Nexus Memory reclamation framework"
+publish = false
+rust-version = "1.75"
+
+[dependencies]
+nexus-memory = { path = "../nexus-memory" }
+
+# Baseline comparison
+crossbeam-epoch = "0.9"
+crossbeam-utils = "0.8"
+
+# Synchronization
+parking_lot = "0.12"
+
+# Randomness for workload generation
+rand = "0.8"
+
+# Serialization for results
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# CSV output
+csv = "1.3"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "batch_benchmarks"
+harness = false
+
+[[bench]]
+name = "stream_benchmarks"
+harness = false
+
+[[bench]]
+name = "graph_benchmarks"
+harness = false
+
+[[bench]]
+name = "cross_paradigm_benchmarks"
+harness = false
+
+[[bench]]
+name = "energy_benchmarks"
+harness = false
+
+[[bench]]
+name = "synthetic"
+harness = false
+
+[features]
+default = []
+full = ["rapl"]
+# Enable hardware RAPL energy monitoring (Linux only)
+# When enabled, benchmarks will panic if RAPL is not accessible
+rapl = []

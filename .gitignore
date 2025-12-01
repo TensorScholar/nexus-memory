@@ -1,0 +1,103 @@
+# Build artifacts
+/target/
+**/target/
+
+# Cargo lock for libraries (keep for applications)
+# Cargo.lock - keeping for reproducibility
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Rust specific
+**/*.rs.bk
+*.pdb
+
+# Benchmark results (keep committed results, ignore temporary)
+/bench-results/
+*.prof
+*.profdata
+perf.data
+perf.data.old
+flamegraph.svg
+cachegrind.out.*
+callgrind.out.*
+
+# Documentation builds
+/docs/book/
+/docs/api/
+
+# Test coverage
+/coverage/
+*.gcno
+*.gcda
+*.gcov
+lcov.info
+tarpaulin-report.html
+cobertura.xml
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# TLA+ model checker outputs
+*.toolbox/
+*.old
+states/
+
+# Python (for analysis scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+*.egg
+.pytest_cache/
+.mypy_cache/
+venv/
+.venv/
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Docker
+.docker/
+
+# Artifact evaluation
+/artifact-eval/
+*.tar.gz
+*.zip
+
+# Generated files
+/generated/
