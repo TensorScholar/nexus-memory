@@ -43,6 +43,9 @@ mod collector;
 mod guard;
 mod hierarchical;
 
+#[cfg(feature = "bench-metrics")]
+pub mod metrics;
+
 pub use collector::{Collector, Participant, InternalMetrics};
 #[cfg(feature = "std")]
 pub use collector::InstrumentedCollector;

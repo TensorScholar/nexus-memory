@@ -35,6 +35,9 @@ use std::boxed::Box;
 
 use super::{Epoch, AtomicEpoch, GarbageBag, Guard, INACTIVE};
 
+#[cfg(feature = "bench-metrics")]
+use std::time::Instant;
+
 /// Maximum number of participants (threads) supported
 const MAX_PARTICIPANTS: usize = 256;
 
@@ -217,6 +220,9 @@ impl Collector {
     /// // Guard is dropped automatically at end of scope
     /// ```
     pub fn pin(&self) -> Guard<'_> {
+        #[cfg(feature = "bench-metrics")]
+        let start = Instant::now();
+
         // SAFETY: Verified by TLA+ action 'EnterCritical' (spec/epoch_reclamation.tla).
         // This corresponds to: active' = active ∪ {t} ∧ threadEpoch' = [threadEpoch EXCEPT ![t] = epoch]
         
@@ -247,6 +253,9 @@ impl Collector {
             }
         }
         
+        #[cfg(feature = "bench-metrics")]
+        crate::epoch::metrics::record_pin(start.elapsed());
+
         Guard::new(self, participant)
     }
 
@@ -275,6 +284,9 @@ impl Collector {
     ///     /\ epoch' = epoch + 1
     /// ```
     pub fn try_advance(&self) -> bool {
+        #[cfg(feature = "bench-metrics")]
+        let start = Instant::now();
+
         // SAFETY: SeqCst ensures we see the most recent epoch value and
         // establishes a total order with participant epoch loads.
         let current = self.global_epoch.load(Ordering::SeqCst);
@@ -305,6 +317,10 @@ impl Collector {
             if p_epoch < current {
                 #[cfg(feature = "statistics")]
                 self.stats.failed_advances.fetch_add(1, Ordering::Relaxed);
+                
+                #[cfg(feature = "bench-metrics")]
+                crate::epoch::metrics::record_advance(start.elapsed());
+
                 return false;
             }
         }
@@ -324,6 +340,9 @@ impl Collector {
             self.stats.epoch_advances.fetch_add(1, Ordering::Relaxed);
         }
         
+        #[cfg(feature = "bench-metrics")]
+        crate::epoch::metrics::record_advance(start.elapsed());
+
         result.is_ok()
     }
 

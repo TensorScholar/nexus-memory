@@ -23,6 +23,7 @@ statistics = []
 libnuma = ["numa"]
 # Loom feature for exhaustive concurrency testing
 loom = ["dep:loom"]
+bench-metrics = []
 
 [dependencies]
 # Core dependencies - kept minimal for publication

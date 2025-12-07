@@ -40,6 +40,9 @@ use crate::sync::atomic::Ordering;
 
 use super::{Epoch, AtomicEpoch, INACTIVE};
 
+#[cfg(feature = "bench-metrics")]
+use std::time::Instant;
+
 /// Branching factor of the epoch tree (number of children per node)
 const BRANCHING_FACTOR: usize = 4;
 
@@ -174,6 +177,9 @@ impl HierarchicalEpoch {
     /// Panics if thread_id >= capacity.
     #[inline]
     pub fn update_local(&self, thread_id: usize, epoch: Epoch) {
+        #[cfg(feature = "bench-metrics")]
+        let start = Instant::now();
+
         assert!(thread_id < self.capacity, "Thread ID out of range");
         
         let old_epoch = self.local_epochs[thread_id].swap(epoch, Ordering::SeqCst);
@@ -182,6 +188,9 @@ impl HierarchicalEpoch {
         if old_epoch != epoch {
             self.propagate_from(thread_id);
         }
+
+        #[cfg(feature = "bench-metrics")]
+        crate::epoch::metrics::record_pin(start.elapsed());
     }
 
     /// Returns a thread's current local epoch.
@@ -202,16 +211,24 @@ impl HierarchicalEpoch {
     /// are currently active.
     #[inline]
     pub fn global_minimum(&self) -> Epoch {
+        #[cfg(feature = "bench-metrics")]
+        let start = Instant::now();
+
         // Ensure aggregation is up-to-date
-        self.aggregate_all();
+        // self.aggregate_all(); // REMOVED: This causes O(T) complexity. Updates are propagated via propagate_from (O(log T)).
         
-        if self.aggregation.is_empty() {
+        let result = if self.aggregation.is_empty() {
             // Only one thread, return directly
             self.local_epochs[0].load(Ordering::SeqCst)
         } else {
             // Return root aggregation
             self.aggregation.last().unwrap()[0].load(Ordering::SeqCst)
-        }
+        };
+
+        #[cfg(feature = "bench-metrics")]
+        crate::epoch::metrics::record_advance(start.elapsed());
+
+        result
     }
 
     /// Returns whether it's safe to reclaim objects from a given epoch.
