@@ -30,7 +30,7 @@
 //! }
 //! ```
 
-use std::ptr;
+// use std::ptr; // Removed to avoid unused warning on non-Linux
 use std::fs;
 use std::path::Path;
 
@@ -177,7 +177,7 @@ pub fn get_physical_node(ptr: *const u8) -> Result<i32> {
             0i32,                           // pid = 0 means current process
             1usize,                         // count = 1 page
             pages.as_mut_ptr(),             // pages array
-            ptr::null::<i32>(),             // nodes = NULL (query only)
+            std::ptr::null::<i32>(),             // nodes = NULL (query only)
             status.as_mut_ptr(),            // status output
             0i32,                           // flags = 0
         )
@@ -197,9 +197,9 @@ pub fn get_physical_node(ptr: *const u8) -> Result<i32> {
     
     if node < 0 {
         // Negative values indicate errors
-        return match node {
-            -libc::ENOENT => Err(NumaVerifyError::PageNotResident),
-            -libc::EFAULT => Err(NumaVerifyError::InvalidPointer),
+        return match -node {
+            libc::ENOENT => Err(NumaVerifyError::PageNotResident),
+            libc::EFAULT => Err(NumaVerifyError::InvalidPointer),
             _ => Err(NumaVerifyError::SyscallFailed(-node)),
         };
     }
