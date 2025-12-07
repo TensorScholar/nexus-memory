@@ -10,7 +10,10 @@ publish = false
 rust-version = "1.75"
 
 [dependencies]
-nexus-memory = { path = "../nexus-memory" }
+nexus-memory = { path = "../nexus-memory", features = ["std", "zero-copy", "numa"] }
+
+# System interfaces for page fault monitoring
+libc = "0.2"
 
 # Baseline comparison
 crossbeam-epoch = "0.9"
@@ -54,6 +57,14 @@ harness = false
 
 [[bench]]
 name = "synthetic"
+harness = false
+
+[[bench]]
+name = "zero_copy_proof"
+harness = false
+
+[[bench]]
+name = "contention_scaling"
 harness = false
 
 [features]
