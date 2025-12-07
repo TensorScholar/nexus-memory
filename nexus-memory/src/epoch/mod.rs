@@ -43,11 +43,13 @@ mod collector;
 mod guard;
 mod hierarchical;
 
-pub use collector::{Collector, Participant};
+pub use collector::{Collector, Participant, InternalMetrics};
+#[cfg(feature = "std")]
+pub use collector::InstrumentedCollector;
 pub use guard::{Guard, Unprotected};
 pub use hierarchical::HierarchicalEpoch;
 
-use core::sync::atomic::AtomicU64;
+use crate::sync::atomic::AtomicU64;
 use core::marker::PhantomData;
 use core::ptr::NonNull;
 use core::mem;

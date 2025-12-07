@@ -10,6 +10,10 @@ keywords = ["memory", "epoch", "concurrent", "lock-free", "numa"]
 categories = ["concurrency", "memory-management"]
 readme = "README.md"
 
+# Allow cfg(loom) without warnings
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
 [features]
 default = ["std"]
 std = []
@@ -17,10 +21,14 @@ zero-copy = []
 numa = ["std", "libc"]
 statistics = []
 libnuma = ["numa"]
+# Loom feature for exhaustive concurrency testing
+loom = ["dep:loom"]
 
 [dependencies]
 # Core dependencies - kept minimal for publication
 libc = { version = "0.2", optional = true }
+# Loom for exhaustive concurrency model checking
+loom = { version = "0.7", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"

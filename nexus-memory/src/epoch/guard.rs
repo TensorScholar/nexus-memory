@@ -14,7 +14,8 @@
 //! Guards use SeqCst ordering for epoch updates to ensure proper synchronization
 //! with the collector's epoch advancement logic.
 
-use core::sync::atomic::Ordering;
+use crate::sync::atomic::Ordering;
+use crate::sync::cell::get_mut_ptr;
 use core::marker::PhantomData;
 
 use super::{Collector, Participant, INACTIVE};
@@ -149,7 +150,7 @@ impl<'a> Guard<'a> {
         //
         // This corresponds to the TLA+ invariant:
         // ∀ t ∈ active, obj ∈ references[t] : obj ∈ allocated \ DOMAIN retired
-        let bag = unsafe { &mut *self.participant.local_garbage.get() };
+        let bag = unsafe { &mut *get_mut_ptr(&self.participant.local_garbage) };
         
         if !bag.is_empty() {
             // SAFETY: Verified by TLA+ action 'Reclaim' preconditions.

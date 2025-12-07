@@ -68,6 +68,9 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+// Conditional synchronization primitives for Loom integration
+pub mod sync;
+
 pub mod epoch;
 
 #[cfg(feature = "zero-copy")]

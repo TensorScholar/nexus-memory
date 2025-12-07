@@ -23,8 +23,8 @@
 //! - collect(): O(G) where G is garbage count
 //! - try_advance(): O(T) where T is participant count
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use core::cell::UnsafeCell;
+use crate::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use crate::sync::cell::{UnsafeCell, get_mut_ptr};
 use core::mem::MaybeUninit;
 
 #[cfg(not(feature = "std"))]
@@ -358,7 +358,7 @@ impl Collector {
                 //
                 // The UnsafeCell access is safe because collection only occurs
                 // after the grace period, ensuring mutual exclusion.
-                let bag = unsafe { &mut *self.garbage[old_epoch as usize].get() };
+                let bag = unsafe { &mut *get_mut_ptr(&self.garbage[old_epoch as usize]) };
                 
                 #[cfg(feature = "statistics")]
                 {
@@ -404,7 +404,7 @@ impl Collector {
         //
         // Note: Concurrent additions to the same bag are handled by the bag's
         // internal synchronization (or by being thread-local in practice).
-        let bag = unsafe { &mut *self.garbage[bag_idx].get() };
+        let bag = unsafe { &mut *get_mut_ptr(&self.garbage[bag_idx]) };
         unsafe { bag.defer(ptr) };
     }
 
@@ -458,6 +458,143 @@ impl Collector {
     }
 }
 
+/// Internal metrics for measuring synchronization overhead.
+///
+/// These metrics enable precise measurement of the time spent in critical
+/// sections, which is essential for validating the O(log T) scaling claim.
+#[derive(Debug, Clone, Default)]
+pub struct InternalMetrics {
+    /// Total time spent in pin() operations (nanoseconds)
+    pub total_pin_time_ns: u64,
+    /// Number of pin() operations measured
+    pub pin_count: u64,
+    /// Total time spent in try_advance() operations (nanoseconds)
+    pub total_advance_time_ns: u64,
+    /// Number of try_advance() operations measured
+    pub advance_count: u64,
+    /// Number of successful epoch advances
+    pub successful_advances: u64,
+    /// Number of CAS retries in try_advance
+    pub cas_retries: u64,
+}
+
+impl InternalMetrics {
+    /// Returns the average pin() latency in nanoseconds.
+    pub fn avg_pin_latency_ns(&self) -> f64 {
+        if self.pin_count == 0 {
+            0.0
+        } else {
+            self.total_pin_time_ns as f64 / self.pin_count as f64
+        }
+    }
+    
+    /// Returns the average try_advance() latency in nanoseconds.
+    pub fn avg_advance_latency_ns(&self) -> f64 {
+        if self.advance_count == 0 {
+            0.0
+        } else {
+            self.total_advance_time_ns as f64 / self.advance_count as f64
+        }
+    }
+    
+    /// Returns the success rate of try_advance().
+    pub fn advance_success_rate(&self) -> f64 {
+        if self.advance_count == 0 {
+            0.0
+        } else {
+            self.successful_advances as f64 / self.advance_count as f64
+        }
+    }
+}
+
+/// A collector wrapper that measures internal operation timings.
+///
+/// This wrapper adds high-resolution timing around critical operations
+/// to enable validation of the O(log T) scaling claim.
+#[cfg(feature = "std")]
+pub struct InstrumentedCollector {
+    inner: Collector,
+    /// Accumulated metrics (thread-local in practice)
+    metrics: std::sync::Mutex<InternalMetrics>,
+}
+
+#[cfg(feature = "std")]
+impl InstrumentedCollector {
+    /// Creates a new instrumented collector.
+    pub fn new() -> Self {
+        Self {
+            inner: Collector::new(),
+            metrics: std::sync::Mutex::new(InternalMetrics::default()),
+        }
+    }
+    
+    /// Pins the current thread with timing instrumentation.
+    ///
+    /// Returns the guard and the time spent in the operation (in nanoseconds).
+    pub fn pin_timed(&self) -> (super::Guard<'_>, u64) {
+        let start = std::time::Instant::now();
+        let guard = self.inner.pin();
+        let elapsed = start.elapsed().as_nanos() as u64;
+        
+        if let Ok(mut metrics) = self.metrics.lock() {
+            metrics.total_pin_time_ns += elapsed;
+            metrics.pin_count += 1;
+        }
+        
+        (guard, elapsed)
+    }
+    
+    /// Attempts to advance the epoch with timing instrumentation.
+    ///
+    /// Returns whether the advance succeeded and the time spent (in nanoseconds).
+    pub fn try_advance_timed(&self) -> (bool, u64) {
+        let start = std::time::Instant::now();
+        let success = self.inner.try_advance();
+        let elapsed = start.elapsed().as_nanos() as u64;
+        
+        if let Ok(mut metrics) = self.metrics.lock() {
+            metrics.total_advance_time_ns += elapsed;
+            metrics.advance_count += 1;
+            if success {
+                metrics.successful_advances += 1;
+            }
+        }
+        
+        (success, elapsed)
+    }
+    
+    /// Returns the current global epoch.
+    pub fn epoch(&self) -> super::Epoch {
+        self.inner.epoch()
+    }
+    
+    /// Returns a reference to the inner collector.
+    pub fn inner(&self) -> &Collector {
+        &self.inner
+    }
+    
+    /// Returns a copy of the current metrics.
+    pub fn get_metrics(&self) -> InternalMetrics {
+        self.metrics.lock()
+            .map(|m| m.clone())
+            .unwrap_or_default()
+    }
+    
+    /// Resets the metrics counters.
+    pub fn reset_metrics(&self) {
+        if let Ok(mut metrics) = self.metrics.lock() {
+            *metrics = InternalMetrics::default();
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl Default for InstrumentedCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Default for Collector {
     fn default() -> Self {
         Self::new()
@@ -478,7 +615,7 @@ impl Drop for Collector {
         for bag in &self.garbage {
             // SAFETY: Exclusive access via &mut self.
             // No concurrent modifications possible during drop.
-            let bag = unsafe { &mut *bag.get() };
+            let bag = unsafe { &mut *get_mut_ptr(bag) };
             // SAFETY: We own all remaining objects; safe to deallocate.
             unsafe { bag.collect() };
         }
@@ -487,7 +624,7 @@ impl Drop for Collector {
         for participant in self.participants.iter() {
             // SAFETY: Exclusive access via &mut self.
             // All participants are either dropped or inaccessible.
-            let bag = unsafe { &mut *participant.local_garbage.get() };
+            let bag = unsafe { &mut *get_mut_ptr(&participant.local_garbage) };
             // SAFETY: Final cleanup; no references can exist.
             unsafe { bag.collect() };
         }

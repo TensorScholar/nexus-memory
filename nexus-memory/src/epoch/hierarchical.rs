@@ -36,7 +36,7 @@
 //! By induction on tree height, the global epoch is a lower bound on
 //! all thread-local epochs. □
 
-use core::sync::atomic::Ordering;
+use crate::sync::atomic::Ordering;
 
 use super::{Epoch, AtomicEpoch, INACTIVE};
 
