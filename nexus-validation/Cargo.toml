@@ -10,7 +10,10 @@ publish = false
 rust-version = "1.75"
 
 [dependencies]
-nexus-memory = { path = "../nexus-memory" }
+nexus-memory = { path = "../nexus-memory", features = ["std", "numa"] }
+
+# System interfaces for NUMA verification
+libc = "0.2"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

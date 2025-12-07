@@ -187,7 +187,7 @@ impl Default for MemoryPolicy {
 }
 
 /// Statistics for NUMA memory operations.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct NumaStats {
     /// Total bytes allocated per node
     pub bytes_allocated: [AtomicU64; MAX_NUMA_NODES],
@@ -200,6 +200,19 @@ pub struct NumaStats {
     
     /// Remote memory accesses
     pub remote_accesses: AtomicU64,
+}
+
+impl Default for NumaStats {
+    fn default() -> Self {
+        // Manually initialize arrays of AtomicU64 since Default isn't implemented for large arrays
+        const INIT: AtomicU64 = AtomicU64::new(0);
+        Self {
+            bytes_allocated: [INIT; MAX_NUMA_NODES],
+            allocation_count: [INIT; MAX_NUMA_NODES],
+            local_accesses: AtomicU64::new(0),
+            remote_accesses: AtomicU64::new(0),
+        }
+    }
 }
 
 impl NumaStats {

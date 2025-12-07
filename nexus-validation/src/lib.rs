@@ -10,9 +10,11 @@
 //! - Effect size analysis (Cohen's d, Cliff's delta)
 //! - Distribution fitting and goodness-of-fit tests
 //! - Outlier detection and robust statistics
+//! - NUMA physical page placement verification
 
 pub mod confidence;
 pub mod statistical;
+pub mod numa_verify;
 
 use std::fmt;
 

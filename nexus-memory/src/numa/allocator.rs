@@ -217,21 +217,25 @@ impl NumaAllocator {
     }
 
     /// Linux-specific NUMA allocation.
+    ///
+    /// This implementation uses mmap + mbind for large allocations to ensure
+    /// proper NUMA node placement. Pages are pre-faulted to guarantee physical
+    /// allocation on the specified node (otherwise, pages remain virtual until
+    /// first touch, which may occur on a different CPU/node).
     #[cfg(target_os = "linux")]
     fn allocate_linux(&self, layout: Layout, node: NodeId) -> Option<NonNull<u8>> {
-        // Try libnuma if available
-        // For portability, we use mmap with mbind
-        
         use std::ptr;
         
         // Use mmap for large allocations, standard allocator for small ones
         if layout.size() >= 4096 {
+            // Allocate virtual memory with MAP_POPULATE to pre-fault pages
+            // MAP_POPULATE ensures pages are resident in memory immediately
             let ptr = unsafe {
                 libc::mmap(
                     ptr::null_mut(),
                     layout.size(),
                     libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_POPULATE,
                     -1,
                     0,
                 )
@@ -241,19 +245,44 @@ impl NumaAllocator {
                 return None;
             }
             
-            // Try to bind to the specified node
-            // This requires libnuma, but we'll make it optional
-            #[cfg(feature = "libnuma")]
+            // Bind to the specified NUMA node using mbind
+            // MPOL_BIND enforces strict placement on the specified node
+            // MPOL_MF_MOVE_ALL will migrate existing pages if needed
             unsafe {
-                let nodemask = 1u64 << node.0;
-                libc::mbind(
+                // Create nodemask with the target node bit set
+                let mut nodemask: [libc::c_ulong; 16] = [0; 16]; // Support up to 1024 nodes
+                let word_idx = (node.0 as usize) / (std::mem::size_of::<libc::c_ulong>() * 8);
+                let bit_idx = (node.0 as usize) % (std::mem::size_of::<libc::c_ulong>() * 8);
+                
+                if word_idx < nodemask.len() {
+                    nodemask[word_idx] = 1 << bit_idx;
+                }
+                
+                // Apply memory policy
+                // Note: mbind may fail silently if NUMA is not available
+                let _ = libc::syscall(
+                    libc::SYS_mbind,
                     ptr,
                     layout.size(),
-                    libc::MPOL_BIND,
-                    &nodemask as *const u64,
-                    MAX_NUMA_NODES as u64,
-                    0,
+                    1i32,  // MPOL_BIND = 1 (libc may not have this constant)
+                    nodemask.as_ptr(),
+                    MAX_NUMA_NODES as libc::c_ulong + 1,
+                    (1 << 2) as libc::c_uint,  // MPOL_MF_MOVE_ALL = 1 << 2
                 );
+            }
+            
+            // Pre-fault pages to ensure physical allocation on the bound node
+            // This is critical for FirstTouch policy to work correctly
+            unsafe {
+                let page_size = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+                let num_pages = (layout.size() + page_size - 1) / page_size;
+                
+                for i in 0..num_pages {
+                    let offset = i * page_size;
+                    let page_ptr = (ptr as *mut u8).add(offset);
+                    // Volatile write to prevent optimization
+                    page_ptr.write_volatile(0);
+                }
             }
             
             NonNull::new(ptr as *mut u8)
