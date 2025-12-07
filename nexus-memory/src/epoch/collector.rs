@@ -238,9 +238,13 @@ impl Collector {
         participant.pin_count.fetch_add(1, Ordering::Relaxed);
         
         // Periodically try to advance and collect
-        let ops = self.ops_since_gc.fetch_add(1, Ordering::Relaxed);
-        if ops % GC_FREQUENCY == 0 {
-            self.try_advance_and_collect();
+        // Note: Disabled during Loom testing to keep state space manageable
+        #[cfg(not(all(feature = "loom", loom)))]
+        {
+            let ops = self.ops_since_gc.fetch_add(1, Ordering::Relaxed);
+            if ops % GC_FREQUENCY == 0 {
+                self.try_advance_and_collect();
+            }
         }
         
         Guard::new(self, participant)
@@ -411,6 +415,14 @@ impl Collector {
     /// Gets or creates a participant slot for the current thread.
     fn get_or_create_participant(&self) -> &Participant {
         // Use thread-local storage to cache participant index
+        // Loom requires its own thread_local! macro for proper model checking
+        #[cfg(all(feature = "loom", loom))]
+        loom::thread_local! {
+            static PARTICIPANT_IDX: core::cell::Cell<Option<usize>> = 
+                core::cell::Cell::new(None);
+        }
+        
+        #[cfg(not(all(feature = "loom", loom)))]
         thread_local! {
             static PARTICIPANT_IDX: core::cell::Cell<Option<usize>> = 
                 const { core::cell::Cell::new(None) };

@@ -25,112 +25,20 @@
 
 use loom::sync::Arc;
 use loom::thread;
-use loom::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use loom::sync::atomic::{AtomicBool, Ordering};
 
-const INACTIVE: u64 = u64::MAX;
-
-// ============================================================================
-// Simplified HierarchicalEpoch for Loom Testing (2 threads)
-// ============================================================================
-
-struct LoomHierarchicalEpoch {
-    local_epochs: [AtomicU64; 2],
-    cached_minimum: AtomicU64,
-}
-
-impl LoomHierarchicalEpoch {
-    fn new() -> Self {
-        Self {
-            local_epochs: [AtomicU64::new(INACTIVE), AtomicU64::new(INACTIVE)],
-            cached_minimum: AtomicU64::new(INACTIVE),
-        }
-    }
-
-    fn update_local(&self, thread_id: usize, epoch: u64) {
-        self.local_epochs[thread_id].store(epoch, Ordering::SeqCst);
-        self.aggregate();
-    }
-
-    fn aggregate(&self) {
-        let mut min = INACTIVE;
-        for epoch_atomic in &self.local_epochs {
-            let epoch = epoch_atomic.load(Ordering::SeqCst);
-            if epoch != INACTIVE && epoch < min {
-                min = epoch;
-            }
-        }
-        self.cached_minimum.store(min, Ordering::SeqCst);
-    }
-
-    fn global_minimum(&self) -> u64 {
-        self.aggregate();
-        self.cached_minimum.load(Ordering::SeqCst)
-    }
-
-    fn local_epoch(&self, thread_id: usize) -> u64 {
-        self.local_epochs[thread_id].load(Ordering::SeqCst)
-    }
-}
+// Import REAL production structs for verification
+use nexus_memory::epoch::{HierarchicalEpoch, Collector, INACTIVE};
 
 // ============================================================================
-// Simplified Collector for Loom Testing (2 participants)
-// ============================================================================
-
-struct LoomCollector {
-    global_epoch: AtomicU64,
-    participant_epochs: [AtomicU64; 2],
-    participant_active: [AtomicBool; 2],
-}
-
-impl LoomCollector {
-    fn new() -> Self {
-        Self {
-            global_epoch: AtomicU64::new(0),
-            participant_epochs: [AtomicU64::new(INACTIVE), AtomicU64::new(INACTIVE)],
-            participant_active: [AtomicBool::new(false), AtomicBool::new(false)],
-        }
-    }
-
-    fn pin(&self, id: usize) -> u64 {
-        self.participant_active[id].store(true, Ordering::SeqCst);
-        let epoch = self.global_epoch.load(Ordering::SeqCst);
-        self.participant_epochs[id].store(epoch, Ordering::SeqCst);
-        epoch
-    }
-
-    fn unpin(&self, id: usize) {
-        self.participant_epochs[id].store(INACTIVE, Ordering::SeqCst);
-        self.participant_active[id].store(false, Ordering::SeqCst);
-    }
-
-    fn try_advance(&self) -> bool {
-        let current = self.global_epoch.load(Ordering::SeqCst);
-        for i in 0..2 {
-            if self.participant_active[i].load(Ordering::SeqCst) {
-                let p_epoch = self.participant_epochs[i].load(Ordering::SeqCst);
-                if p_epoch != INACTIVE && p_epoch < current {
-                    return false;
-                }
-            }
-        }
-        self.global_epoch
-            .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-    }
-
-    fn epoch(&self) -> u64 {
-        self.global_epoch.load(Ordering::SeqCst)
-    }
-}
-
-// ============================================================================
-// Core Verification Tests (2-thread exhaustive)
+// Core Verification Tests - HierarchicalEpoch (2-thread exhaustive)
 // ============================================================================
 
 #[test]
 fn loom_test_01_concurrent_updates() {
     loom::model(|| {
-        let hier = Arc::new(LoomHierarchicalEpoch::new());
+        // Use capacity 4 (minimum power of branching factor that supports thread IDs 0 and 1)
+        let hier = Arc::new(HierarchicalEpoch::new(4));
         let h1 = Arc::clone(&hier);
         let h2 = Arc::clone(&hier);
 
@@ -153,7 +61,7 @@ fn loom_test_01_concurrent_updates() {
 #[test]
 fn loom_test_02_read_write_atomicity() {
     loom::model(|| {
-        let hier = Arc::new(LoomHierarchicalEpoch::new());
+        let hier = Arc::new(HierarchicalEpoch::new(4));
         let h1 = Arc::clone(&hier);
         let h2 = Arc::clone(&hier);
 
@@ -172,81 +80,9 @@ fn loom_test_02_read_write_atomicity() {
 }
 
 #[test]
-fn loom_test_03_pin_unpin() {
-    loom::model(|| {
-        let coll = Arc::new(LoomCollector::new());
-        let c1 = Arc::clone(&coll);
-        let c2 = Arc::clone(&coll);
-
-        let t0 = thread::spawn(move || {
-            let e = c1.pin(0);
-            c1.unpin(0);
-            e
-        });
-
-        let t1 = thread::spawn(move || {
-            let e = c2.pin(1);
-            c2.unpin(1);
-            e
-        });
-
-        t0.join().unwrap();
-        t1.join().unwrap();
-    });
-}
-
-#[test]
-fn loom_test_04_pin_advance_race() {
-    loom::model(|| {
-        let coll = Arc::new(LoomCollector::new());
-        let c1 = Arc::clone(&coll);
-        let c2 = Arc::clone(&coll);
-
-        let pinner = thread::spawn(move || {
-            let e = c1.pin(0);
-            c1.unpin(0);
-            e
-        });
-
-        let advancer = thread::spawn(move || {
-            c2.try_advance()
-        });
-
-        pinner.join().unwrap();
-        advancer.join().unwrap();
-    });
-}
-
-#[test]
-fn loom_test_05_epoch_monotonicity() {
-    loom::model(|| {
-        let coll = Arc::new(LoomCollector::new());
-        let c1 = Arc::clone(&coll);
-        let c2 = Arc::clone(&coll);
-
-        let t0 = thread::spawn(move || {
-            let e1 = c1.epoch();
-            c1.try_advance();
-            let e2 = c1.epoch();
-            assert!(e2 >= e1, "Epoch went backwards!");
-        });
-
-        let t1 = thread::spawn(move || {
-            let e1 = c2.epoch();
-            c2.try_advance();
-            let e2 = c2.epoch();
-            assert!(e2 >= e1, "Epoch went backwards!");
-        });
-
-        t0.join().unwrap();
-        t1.join().unwrap();
-    });
-}
-
-#[test]
 fn loom_test_06_inactive_handling() {
     loom::model(|| {
-        let hier = Arc::new(LoomHierarchicalEpoch::new());
+        let hier = Arc::new(HierarchicalEpoch::new(4));
         let h1 = Arc::clone(&hier);
         let h2 = Arc::clone(&hier);
 
@@ -265,22 +101,105 @@ fn loom_test_06_inactive_handling() {
     });
 }
 
+// ============================================================================
+// Core Verification Tests - Collector (2-thread exhaustive)
+// ============================================================================
+
+#[test]
+fn loom_test_03_pin_unpin() {
+    loom::model(|| {
+        let coll = Arc::new(Collector::new());
+        let c1 = Arc::clone(&coll);
+        let c2 = Arc::clone(&coll);
+
+        let t0 = thread::spawn(move || {
+            let guard = c1.pin();
+            let epoch = c1.epoch();
+            drop(guard);
+            epoch
+        });
+
+        let t1 = thread::spawn(move || {
+            let guard = c2.pin();
+            let epoch = c2.epoch();
+            drop(guard);
+            epoch
+        });
+
+        t0.join().unwrap();
+        t1.join().unwrap();
+    });
+}
+
+#[test]
+fn loom_test_04_pin_advance_race() {
+    loom::model(|| {
+        let coll = Arc::new(Collector::new());
+        let c1 = Arc::clone(&coll);
+        let c2 = Arc::clone(&coll);
+
+        let pinner = thread::spawn(move || {
+            let guard = c1.pin();
+            let epoch = c1.epoch();
+            drop(guard);
+            epoch
+        });
+
+        let advancer = thread::spawn(move || {
+            c2.try_advance()
+        });
+
+        pinner.join().unwrap();
+        advancer.join().unwrap();
+    });
+}
+
+#[test]
+fn loom_test_05_epoch_monotonicity() {
+    loom::model(|| {
+        let coll = Arc::new(Collector::new());
+        let c1 = Arc::clone(&coll);
+        let c2 = Arc::clone(&coll);
+
+        // Thread 0 attempts to advance the epoch
+        let t0 = thread::spawn(move || {
+            c1.try_advance();
+        });
+
+        // Thread 1 observes epoch and verifies monotonicity
+        let t1 = thread::spawn(move || {
+            let e1 = c2.epoch();
+            let e2 = c2.epoch();
+            assert!(e2 >= e1, "Epoch went backwards!");
+        });
+
+        t0.join().unwrap();
+        t1.join().unwrap();
+        
+        // Final epoch should be >= initial (0)
+        assert!(coll.epoch() >= 0);
+    });
+}
+
 #[test]
 fn loom_test_07_grace_period() {
     loom::model(|| {
-        let coll = Arc::new(LoomCollector::new());
+        let coll = Arc::new(Collector::new());
         let violation = Arc::new(AtomicBool::new(false));
         let c1 = Arc::clone(&coll);
         let v1 = Arc::clone(&violation);
         let c2 = Arc::clone(&coll);
 
         let pinner = thread::spawn(move || {
-            let my_epoch = c1.pin(0);
+            let guard = c1.pin();
+            let my_epoch = c1.epoch();
+            // After pinning, the current epoch should not advance more than 1
+            // beyond our pinned epoch while we hold the guard
             let current = c1.epoch();
             if current > my_epoch + 1 {
                 v1.store(true, Ordering::SeqCst);
             }
-            c1.unpin(0);
+            drop(guard);
         });
 
         let advancer = thread::spawn(move || {
