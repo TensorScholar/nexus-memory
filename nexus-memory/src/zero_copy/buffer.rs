@@ -30,7 +30,7 @@
 use core::sync::atomic::{AtomicU32, AtomicUsize, AtomicBool, Ordering};
 use core::marker::PhantomData;
 use core::ptr::NonNull;
-use core::mem::{self, MaybeUninit};
+use core::mem::{self};
 use core::ops::{Deref, DerefMut};
 use core::slice;
 
@@ -40,7 +40,7 @@ use alloc::{alloc::{alloc, dealloc, Layout}, boxed::Box, vec::Vec};
 #[cfg(feature = "std")]
 use std::alloc::{alloc, dealloc, Layout};
 
-use super::{ZeroCopyError, Result, Region, ZeroCopyRef, ZeroCopyMut, PhantomLifetime};
+use super::{ZeroCopyError, Result, Region};
 
 /// Cache line size for alignment
 const CACHE_LINE: usize = 64;

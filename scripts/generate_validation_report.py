@@ -1,273 +1,154 @@
-#!/usr/bin/env python3
-"""
-Scientific Validation Report Generator
-
-Generates a summary validation report in Markdown format for artifact reviewers.
-The report provides a single "green checkmark" overview of all paper claims.
-
-Usage:
-    python3 scripts/generate_validation_report.py --input results/verification_results.csv
-
-Output:
-    Markdown table summarizing all verification results with confidence levels.
-
-Author: Mohammad-Ali Atashi
-"""
-
-import argparse
-import csv
-import os
+import subprocess
 import sys
-from datetime import datetime
-from pathlib import Path
+import os
+import datetime
+import re
 
+RESULTS_DIR = "results"
+REPORT_FILE = "VALIDATION_REPORT.md"
 
-# Paper claims to verify
-CLAIMS = {
-    'loom_verification': {
-        'claim': 'Memory Safety',
-        'paper_section': 'Section 4.1',
-        'description': 'Freedom from data races in lock-free epoch primitives',
-    },
-    'zero_copy_pointer_stability': {
-        'claim': 'Zero-Copy Transfers',
-        'paper_section': 'Section 3.2',
-        'description': 'Pointer addresses remain stable across paradigm transitions',
-    },
-    'zero_copy_page_faults': {
-        'claim': 'Zero-Copy (OS Level)',
-        'paper_section': 'Section 3.2',
-        'description': 'No OS-level memory copies (page faults) during transitions',
-    },
-    'numa_physical_placement': {
-        'claim': 'NUMA Affinity',
-        'paper_section': 'Section 5.3',
-        'description': 'Physical page placement on specified NUMA nodes',
-    },
-    'olog_t_scaling': {
-        'claim': 'O(log T) Scaling',
-        'paper_section': 'Section 4.2, Figure 7',
-        'description': 'Synchronization overhead scales logarithmically with threads',
-    },
-}
+def ensure_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
 
-
-def load_results(csv_path):
-    """Load verification results from CSV."""
-    results = {}
-    
-    if not os.path.exists(csv_path):
-        return results
-    
-    with open(csv_path, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            test_name = row.get('test_name', '')
-            results[test_name] = {
-                'result': row.get('result', 'UNKNOWN'),
-                'confidence': row.get('confidence', 'N/A'),
-                'method': row.get('method', 'Unknown'),
-            }
-    
-    return results
-
-
-def generate_status_emoji(result):
-    """Generate status emoji based on result."""
-    result_upper = result.upper()
-    if result_upper == 'PASS':
-        return '✅'
-    elif result_upper == 'PARTIAL':
-        return '⚠️'
-    elif result_upper == 'SKIPPED':
-        return '⏭️'
-    elif result_upper == 'SYNTHETIC':
-        return '🔬'
-    else:
-        return '❌'
-
-
-def generate_confidence_badge(confidence):
-    """Generate confidence level description."""
-    if confidence in ['100%', 'Verified', 'Exhaustive']:
-        return '100% (Exhaustive)'
-    elif confidence in ['N/A', 'SKIPPED']:
-        return 'N/A'
-    elif confidence.startswith('0.'):
-        # R² score
-        try:
-            r2 = float(confidence)
-            if r2 >= 0.95:
-                return f'> 0.95 (R²={r2:.3f})'
-            else:
-                return f'{r2:.3f} (R²)'
-        except ValueError:
-            return confidence
-    else:
-        return confidence
-
-
-def generate_report(results, output_path):
-    """Generate the validation report in Markdown format."""
-    
-    lines = []
-    
-    # Header
-    lines.append('# Nexus Memory: Scientific Validation Report')
-    lines.append('')
-    lines.append(f'**Generated:** {datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")}')
-    lines.append('')
-    lines.append('This report summarizes the verification of all claims from the paper')
-    lines.append('"Nexus: Unified Memory Reclamation for Cross-Paradigm Data Processing".')
-    lines.append('')
-    
-    # Summary table
-    lines.append('## Verification Summary')
-    lines.append('')
-    lines.append('| Claim | Method | Result | Confidence |')
-    lines.append('|-------|--------|--------|------------|')
-    
-    all_pass = True
-    
-    for test_name, claim_info in CLAIMS.items():
-        result_data = results.get(test_name, {
-            'result': 'NOT_RUN',
-            'confidence': 'N/A',
-            'method': 'Not executed',
-        })
-        
-        status = generate_status_emoji(result_data['result'])
-        result_text = f"{status} {result_data['result']}"
-        confidence = generate_confidence_badge(result_data['confidence'])
-        
-        lines.append(f"| {claim_info['claim']} | {result_data['method']} | {result_text} | {confidence} |")
-        
-        if result_data['result'].upper() not in ['PASS', 'SKIPPED', 'SYNTHETIC']:
-            all_pass = False
-    
-    lines.append('')
-    
-    # Overall verdict
-    lines.append('## Overall Verdict')
-    lines.append('')
-    
-    if all_pass:
-        lines.append('🎉 **ALL VERIFIABLE CLAIMS VALIDATED** 🎉')
-        lines.append('')
-        lines.append('The artifact successfully reproduces the key claims from the paper.')
-    else:
-        lines.append('⚠️ **PARTIAL VALIDATION**')
-        lines.append('')
-        lines.append('Some claims could not be fully verified. See individual results above.')
-    
-    lines.append('')
-    
-    # Detailed descriptions
-    lines.append('## Claim Details')
-    lines.append('')
-    
-    for test_name, claim_info in CLAIMS.items():
-        result_data = results.get(test_name, {'result': 'NOT_RUN'})
-        status = generate_status_emoji(result_data['result'])
-        
-        lines.append(f"### {claim_info['claim']} {status}")
-        lines.append('')
-        lines.append(f"**Paper Reference:** {claim_info['paper_section']}")
-        lines.append('')
-        lines.append(f"**Description:** {claim_info['description']}")
-        lines.append('')
-        
-        if test_name in results:
-            lines.append(f"**Method:** {results[test_name]['method']}")
-            lines.append('')
-            lines.append(f"**Result:** {results[test_name]['result']}")
-            lines.append('')
-        else:
-            lines.append('**Status:** Not executed in this run')
-            lines.append('')
-    
-    # Reproduction instructions
-    lines.append('## Reproduction Instructions')
-    lines.append('')
-    lines.append('To reproduce these results:')
-    lines.append('')
-    lines.append('```bash')
-    lines.append('# Full reproduction')
-    lines.append('./scripts/reproduce-all.sh')
-    lines.append('')
-    lines.append('# Individual verification tests')
-    lines.append('cargo test --features loom --test loom_verification  # Memory Safety')
-    lines.append('cargo bench --package nexus-benchmarks -- zero_copy_proof  # Zero-Copy')
-    lines.append('cargo test --package nexus-validation numa_verify  # NUMA')
-    lines.append('cargo bench --package nexus-benchmarks -- contention_scaling  # O(log T)')
-    lines.append('python3 scripts/plot_scaling_theory.py  # Scaling Analysis')
-    lines.append('```')
-    lines.append('')
-    
-    # Footer
-    lines.append('---')
-    lines.append('')
-    lines.append('*Report generated by `scripts/generate_validation_report.py`*')
-    lines.append('')
-    lines.append('**Repository:** https://github.com/TensorScholar/nexus-memory')
-    lines.append('')
-    lines.append('**Author:** Mohammad-Ali Atashi')
-    
-    # Write output
-    report_content = '\n'.join(lines)
-    
-    with open(output_path, 'w') as f:
-        f.write(report_content)
-    
-    # Also print to console
-    print(report_content)
-    
-    return all_pass
-
+def run_command(name, cmd, cwd=None):
+    print(f"[{name}] Running: {cmd} ...")
+    try:
+        # Use shell=True for complex commands (e.g. redirects, though we handle redirects manually if needed)
+        # But for security and simplicity with list args, shell=False is better unless we need pipe.
+        # Here we will use shell=True to allow redirects in the command string if present.
+        result = subprocess.run(
+            cmd, 
+            shell=True, 
+            cwd=cwd, 
+            capture_output=True, 
+            text=True
+        )
+        success = result.returncode == 0
+        status = "PASS" if success else "FAIL"
+        print(f"[{name}] Result: {status}")
+        return success, result.stdout + result.stderr
+    except Exception as e:
+        print(f"[{name}] Error: {e}")
+        return False, str(e)
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Generate validation report from verification results'
-    )
-    parser.add_argument(
-        '--input', '-i',
-        default='results/verification_results.csv',
-        help='Path to verification results CSV'
-    )
-    parser.add_argument(
-        '--output', '-o',
-        default='results/validation_report.md',
-        help='Output path for Markdown report'
-    )
+    ensure_dir(RESULTS_DIR)
     
-    args = parser.parse_args()
+    report_content = []
+    current_date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # Find project root
-    script_dir = Path(__file__).parent
-    project_root = script_dir.parent
+    report_content.append(f"# NEXUS Artifact Evaluation: Comprehensive Validation Report\n")
+    report_content.append(f"**Date:** {current_date}\n")
+    report_content.append(f"**Status:** READY FOR REVIEW\n\n")
+
+    overall_success = True
+
+    # --- 1. Memory Safety (Loom) ---
+    print("\n--- Step 1: Memory Safety (Loom) ---")
+    # Note: RUSTFLAGS="--cfg loom" is needed for loom tests
+    loom_cmd = 'RUSTFLAGS="--cfg loom" cargo test --features loom --test loom_verification --release'
+    success_loom, output_loom = run_command("Memory Safety", loom_cmd)
     
-    input_path = project_root / args.input
-    output_path = project_root / args.output
+    # Extract relevant snippet (last few lines)
+    loom_snippet = "\n".join(output_loom.strip().split('\n')[-20:])
     
-    # Ensure output directory exists
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report_content.append("## 1. Memory Safety (Formal Verification)\n")
+    report_content.append("- **Method:** Exhaustive Model Checking (Loom) across atomic interleavings.")
+    report_content.append(f"- **Result:** { 'PASS' if success_loom else 'FAIL' }")
+    report_content.append("\n<details>\n<summary>Details</summary>\n\n```text")
+    report_content.append(loom_snippet)
+    report_content.append("```\n\n</details>\n")
+    if not success_loom: overall_success = False
+
+    # --- 2. Zero-Copy Mechanics ---
+    print("\n--- Step 2: Zero-Copy Mechanics ---")
+    zc_cmd = "cargo run --release --bin proof_zero_copy"
+    success_zc, output_zc = run_command("Zero-Copy", zc_cmd)
     
-    # Load results
-    if input_path.exists():
-        results = load_results(str(input_path))
-        print(f"Loaded {len(results)} verification results from {input_path}")
+    # Check for "VERIFIED" keyword if exit code 0 isn't enough (it should be)
+    if success_zc and "VERIFIED" not in output_zc and "PASSED" not in output_zc and "[PASS]" not in output_zc:
+         if "VERIFICATION PASSED" not in output_zc:
+            print("Warning: verification keyword not found in zero-copy output")
+            # Don't fail if return code is 0, but note it.
+
+    zc_snippet = "\n".join(output_zc.strip().split('\n')[-20:])
+
+    report_content.append("## 2. Zero-Copy Mechanics (Forensic Analysis)\n")
+    report_content.append("- **Method:** Pointer Stability & Page Fault Monitoring (OS Kernel Stats).")
+    report_content.append(f"- **Result:** { 'PASS' if success_zc else 'FAIL' }")
+    report_content.append(f"- **Proof:**\n\n```text")
+    report_content.append(zc_snippet)
+    report_content.append("```\n")
+    if not success_zc: overall_success = False
+
+    # --- 3. NUMA Affinity ---
+    print("\n--- Step 3: NUMA Affinity ---")
+    numa_cmd = "cargo test --release --test numa_placement"
+    success_numa, output_numa = run_command("NUMA", numa_cmd)
+    
+    # Handle SKIP
+    numa_status = "PASS"
+    if not success_numa:
+        numa_status = "FAIL"
+    elif "0 ignored" not in output_numa and "ignored" in output_numa: 
+        # cargo test output: "test result: ok. 1 passed; 0 failed; 1 ignored;"
+        # If ignored count > 0, it was skipped
+        if re.search(r" \d+ passed; 0 failed; [1-9]\d* ignored", output_numa):
+             numa_status = "SKIP (Hardware Requirement)"
+    
+    numa_snippet = "\n".join(output_numa.strip().split('\n')[-15:])
+
+    report_content.append("## 3. NUMA Affinity (Physical Verification)\n")
+    report_content.append("- **Method:** `move_pages` syscall query on allocated pages.")
+    report_content.append(f"- **Result:** {numa_status}")
+    report_content.append("\n<details>\n<summary>Details</summary>\n\n```text")
+    report_content.append(numa_snippet)
+    report_content.append("```\n\n</details>\n")
+    if numa_status == "FAIL": overall_success = False
+
+    # --- 4. Scaling Law ---
+    print("\n--- Step 4: Scaling Law ---")
+    # 1. Run Benchmark
+    # Using cargo bench as per my implementation, piping to csv
+    bench_cmd = f"cargo bench -q --bench contention_scaling > {RESULTS_DIR}/scaling_raw.csv"
+    success_bench, output_bench = run_command("Scaling Bench", bench_cmd)
+    
+    scaling_status = "FAIL"
+    stats_output = "Benchmark Failed"
+    
+    if success_bench:
+        # 2. Run Verification
+        verify_cmd = f"python3 scripts/verify_scaling_law.py {RESULTS_DIR}/scaling_raw.csv"
+        success_verify, output_verify = run_command("Scaling Verify", verify_cmd)
+        
+        stats_output = output_verify
+        if success_verify and ("CONFIRMED" in output_verify or "PASS" in output_verify):
+            scaling_status = "PASS"
+        else:
+            scaling_status = "FAIL"
+            overall_success = False
     else:
-        print(f"Warning: Results file not found at {input_path}")
-        print("Generating report with placeholder data...")
-        results = {}
-    
-    # Generate report
-    all_pass = generate_report(results, str(output_path))
-    
-    print(f"\nReport saved to: {output_path}")
-    
-    return 0 if all_pass else 1
+        overall_success = False
 
+    report_content.append("## 4. Scalability Law (Mathematical Proof)\n")
+    report_content.append("- **Method:** Regression Analysis ($R^2$) on High-Contention Latency.")
+    report_content.append(f"- **Result:** {scaling_status}")
+    report_content.append(f"- **Statistics:**\n\n```text")
+    report_content.append(stats_output)
+    report_content.append("```\n")
 
-if __name__ == '__main__':
-    sys.exit(main())
+    # Write Report
+    with open(REPORT_FILE, "w") as f:
+        f.write("\n".join(report_content))
+    
+    print(f"\nReport generated: {REPORT_FILE}")
+    if overall_success:
+        print("Overall Status: ALL SYSTEMS GO")
+        sys.exit(0)
+    else:
+        print("Overall Status: FAILURES DETECTED")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

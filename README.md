@@ -15,6 +15,23 @@
 - **Formally Verified**: TLA+ model checking (12.4M states) proves memory safety invariants
 - **NUMA-Aware**: Socket-local allocation yields 36% throughput improvement
 
+# NEXUS Memory
+## 🏆 Artifact Evaluation (Reproducibility)
+
+This repository includes a rigorous forensic verification suite to prove the paper's core claims:
+
+1. **Run Full Validation:**
+   ```bash
+   python3 scripts/generate_validation_report.py
+   ```
+   *Generates [VALIDATION_REPORT.md](VALIDATION_REPORT.md) with Pass/Fail results for Memory Safety, Zero-Copy, and Scaling.*
+
+2. **Verify Specific Claims:**
+   - **Zero-Copy Proof:** `cargo run --release --bin proof_zero_copy`
+   - **Memory Safety:** `cargo test --features loom --test loom_verification --release`
+   - **NUMA Placement:** `cargo test --test numa_placement --release`
+
+## Overview
 ## Performance Summary
 
 | Metric | Nexus | Crossbeam | Spark | Flink |

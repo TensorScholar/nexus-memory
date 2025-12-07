@@ -7,8 +7,7 @@
 //! Usage: `cargo run --bin proof_zero_copy`
 
 use nexus_memory::zero_copy::ZeroCopyBuffer;
-use std::mem::MaybeUninit;
-use std::time::Instant;
+
 use std::marker::PhantomData;
 
 #[cfg(target_os = "linux")]
@@ -80,7 +79,7 @@ fn verify_pointer_stability() {
 
     // 1. Setup
     println!("- Allocating {} MB buffer...", BUFFER_SIZE_MB);
-    let mut buffer = ZeroCopyBuffer::<u64>::new(ELEMENT_COUNT);
+    let buffer = ZeroCopyBuffer::<u64>::new(ELEMENT_COUNT);
     
     // Fill data to ensure pages are committed
     for i in 0..ELEMENT_COUNT {

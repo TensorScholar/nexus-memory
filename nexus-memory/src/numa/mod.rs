@@ -41,7 +41,7 @@ mod allocator;
 pub use topology::{NumaTopology, NodeId, CpuSet};
 pub use allocator::{NumaAllocator, AllocationPolicy};
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Maximum supported NUMA nodes
 pub const MAX_NUMA_NODES: usize = 64;

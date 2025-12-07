@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::time::Duration;
 
 #[derive(Debug, Default, Clone, Copy)]
+#[allow(missing_docs)]
 pub struct LatencyMetrics {
     /// Total time spent in pin()
     pub pin_nanos: u64,

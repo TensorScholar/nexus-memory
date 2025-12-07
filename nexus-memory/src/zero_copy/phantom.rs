@@ -367,6 +367,7 @@ unsafe impl<'buf, 'scope, T: Sync + ?Sized> Sync for ZeroCopyMut<'buf, 'scope, T
 ///     });
 /// }
 /// ```
+#[allow(dead_code)]
 pub struct ScopedRegion<'a> {
     _marker: PhantomData<&'a ()>,
 }
@@ -405,6 +406,7 @@ pub mod lifetime_arithmetic {
     ///
     /// Returns a marker for the shorter of the two lifetimes.
     #[inline]
+    #[allow(dead_code)]
     pub fn intersect<'a, 'b>() -> PhantomLifetime<'a>
     where
         'a: 'b,
@@ -419,6 +421,7 @@ pub mod lifetime_arithmetic {
     /// The caller must ensure that the data actually lives for the
     /// extended lifetime.
     #[inline]
+    #[allow(dead_code)]
     pub unsafe fn extend_scope<'buf, 'short, 'long, T: ?Sized>(
         r: ZeroCopyRef<'buf, 'short, T>,
     ) -> ZeroCopyRef<'buf, 'long, T>

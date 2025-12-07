@@ -42,6 +42,7 @@ use std::time::Instant;
 const MAX_PARTICIPANTS: usize = 256;
 
 /// Epochs between garbage collection attempts
+#[allow(dead_code)]
 const GC_FREQUENCY: u64 = 128;
 
 /// The global garbage collector
@@ -88,6 +89,7 @@ pub struct Collector {
     garbage: [UnsafeCell<GarbageBag>; 4],
     
     /// Number of operations since last GC attempt
+    #[allow(dead_code)]
     ops_since_gc: AtomicU64,
     
     /// Collection statistics
@@ -357,6 +359,7 @@ impl Collector {
     ///     /\ retired[obj] + GracePeriod < epoch
     ///     /\ ∀ t ∈ Threads : obj ∉ references[t]
     /// ```
+    #[allow(dead_code)]
     fn try_advance_and_collect(&self) {
         // Try to advance the epoch
         if self.try_advance() {

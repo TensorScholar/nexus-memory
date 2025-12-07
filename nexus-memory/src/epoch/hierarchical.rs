@@ -37,6 +37,7 @@
 //! all thread-local epochs. □
 
 use crate::sync::atomic::Ordering;
+use crate::sync::sync::Mutex;
 
 use super::{Epoch, AtomicEpoch, INACTIVE};
 
@@ -88,6 +89,9 @@ pub struct HierarchicalEpoch {
     /// aggregation[k] = aggregates of aggregation[k-1]
     aggregation: Vec<Vec<AtomicEpoch>>,
     
+    /// Locks for aggregating nodes (avoids lost updates during propagation)
+    aggregation_locks: Vec<Vec<Mutex<()>>>,
+    
     /// Number of supported threads
     capacity: usize,
     
@@ -136,9 +140,19 @@ impl HierarchicalEpoch {
             aggregation.push(level);
         }
         
+        // Create aggregation locks (mirroring aggregation structure)
+        let mut aggregation_locks = Vec::new();
+        for level in &aggregation {
+            let level_locks: Vec<Mutex<()>> = (0..level.len())
+                .map(|_| Mutex::new(()))
+                .collect();
+            aggregation_locks.push(level_locks);
+        }
+
         Self {
             local_epochs,
             aggregation,
+            aggregation_locks,
             capacity: actual_capacity,
             depth,
         }
@@ -255,6 +269,9 @@ impl HierarchicalEpoch {
             let start = parent_idx * BRANCHING_FACTOR;
             let end = (start + BRANCHING_FACTOR).min(self.local_epochs.len());
             
+            // Lock the parent node to ensure atomic read-modify-write relative to siblings
+            let _lock = self.aggregation_locks[0][parent_idx].lock().unwrap();
+
             let min = self.local_epochs[start..end]
                 .iter()
                 .map(|e| e.load(Ordering::SeqCst))
@@ -273,6 +290,9 @@ impl HierarchicalEpoch {
             let prev_len = self.aggregation[level_idx - 1].len();
             let end = (start + BRANCHING_FACTOR).min(prev_len);
             
+            // Lock the parent node
+            let _lock = self.aggregation_locks[level_idx][parent_idx].lock().unwrap();
+
             let min = self.aggregation[level_idx - 1][start..end]
                 .iter()
                 .map(|e| e.load(Ordering::SeqCst))
@@ -345,6 +365,7 @@ impl HierarchicalEpoch {
 }
 
 /// Builder for HierarchicalEpoch with configurable parameters.
+#[allow(dead_code)]
 pub struct HierarchicalEpochBuilder {
     capacity: usize,
 }

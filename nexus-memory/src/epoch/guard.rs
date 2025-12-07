@@ -275,6 +275,7 @@ impl UnprotectedGuard<'_> {
 /// `ScopedGuard` is similar to `Guard` but takes a closure, ensuring
 /// that all operations are completed before the guard is released.
 /// This can help prevent accidental lifetime extension of protected references.
+#[allow(dead_code)]
 pub struct ScopedGuard<'a, F>
 where
     F: FnOnce(&Guard<'a>),
@@ -316,6 +317,7 @@ where
 ///
 /// This trait allows generic code to work with both `Guard` and
 /// `UnprotectedGuard` types.
+#[allow(dead_code)]
 pub trait Guarded {
     /// Returns whether this is a real (protected) guard.
     fn is_protected(&self) -> bool;

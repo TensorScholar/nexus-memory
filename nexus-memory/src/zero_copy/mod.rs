@@ -50,8 +50,6 @@ mod phantom;
 pub use buffer::{ZeroCopyBuffer, ZeroCopyBufferBuilder};
 pub use phantom::{PhantomLifetime, ZeroCopyRef, ZeroCopyMut};
 
-use core::marker::PhantomData;
-use core::ptr::NonNull;
 
 /// Error types for zero-copy operations
 #[derive(Debug, Clone, PartialEq, Eq)]

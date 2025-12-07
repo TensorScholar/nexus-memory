@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "std")]
 use std::alloc::{alloc, dealloc};
 
-use super::{NumaTopology, NodeId, MemoryPolicy, NumaStats, NumaError, Result, MAX_NUMA_NODES};
+use super::{NumaTopology, NodeId, NumaStats, NumaError, Result};
 
 /// NUMA-aware memory allocator.
 ///
@@ -36,6 +36,7 @@ pub struct NumaAllocator {
     stats: NumaStats,
     
     /// Default allocation policy
+    #[allow(dead_code)]
     default_policy: AllocationPolicy,
 }
 
@@ -115,7 +116,7 @@ impl NumaAllocator {
         
         let ptr = self.allocate_on_node(layout, node);
         
-        if let Some(p) = ptr {
+        if let Some(_p) = ptr {
             self.stats.record_allocation(node.0, layout.size() as u64);
         }
         
@@ -204,7 +205,7 @@ impl NumaAllocator {
     }
 
     /// Platform-specific allocation on a node.
-    fn allocate_on_node(&self, layout: Layout, node: NodeId) -> Option<NonNull<u8>> {
+    fn allocate_on_node(&self, layout: Layout, _node: NodeId) -> Option<NonNull<u8>> {
         #[cfg(target_os = "linux")]
         {
             self.allocate_linux(layout, node)
@@ -342,6 +343,7 @@ impl Default for NumaAllocator {
 /// A NUMA-allocated buffer.
 ///
 /// Wraps allocated memory with its NUMA node information for proper deallocation.
+#[allow(dead_code)]
 pub struct NumaBuffer<T> {
     ptr: NonNull<T>,
     count: usize,

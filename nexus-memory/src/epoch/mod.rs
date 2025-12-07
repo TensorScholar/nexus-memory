@@ -74,6 +74,7 @@ pub type AtomicEpoch = AtomicU64;
 pub const INACTIVE: Epoch = u64::MAX;
 
 /// Number of epochs in a cycle (power of 2 for efficient modulo)
+#[allow(dead_code)]
 const EPOCH_CYCLE: Epoch = 4;
 
 /// An owned pointer to heap-allocated data
@@ -346,6 +347,7 @@ impl GarbageBag {
     }
 
     /// Returns the number of deferred objects.
+    #[allow(dead_code)]
     pub(crate) fn len(&self) -> usize {
         self.deferred.len()
     }

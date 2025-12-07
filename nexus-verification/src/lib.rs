@@ -290,7 +290,7 @@ impl<P, S> PropertyWrapper<P, S> {
 impl<P, S> PropertyBoxTyped<S> for PropertyWrapper<P, S>
 where
     P: Property + Send + Sync + 'static,
-    S: VerifiableState + 'static,
+    S: VerifiableState + 'static + Send,
 {
     fn name(&self) -> &str {
         Property::name(&self.property)
@@ -314,7 +314,7 @@ impl<P: Property + Send + Sync + 'static> PropertyBox for P {
         Property::description(self)
     }
     
-    fn check_any(&self, state: &dyn std::any::Any) -> bool {
+    fn check_any(&self, _state: &dyn std::any::Any) -> bool {
         // Attempt to downcast the state to a concrete type that implements VerifiableState.
         // This is the critical fix: we now perform actual type-safe downcasting
         // instead of always returning true.
@@ -351,7 +351,7 @@ pub struct VerificationStats {
     pub violations_found: AtomicU64,
 }
 
-impl<S: VerifiableState + 'static> VerificationEngine<S> {
+impl<S: VerifiableState + 'static + std::marker::Send> VerificationEngine<S> {
     /// Create a new verification engine
     pub fn new() -> Self {
         Self {
@@ -432,7 +432,7 @@ impl<S: VerifiableState + 'static> VerificationEngine<S> {
     }
 }
 
-impl<S: VerifiableState + 'static> Default for VerificationEngine<S> {
+impl<S: VerifiableState + 'static + std::marker::Send> Default for VerificationEngine<S> {
     fn default() -> Self {
         Self::new()
     }

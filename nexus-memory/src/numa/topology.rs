@@ -3,12 +3,11 @@
 //! Discovers and represents the NUMA topology of the system, including
 //! node count, CPU affinity, memory capacity, and inter-node distances.
 
-use core::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "std")]
 use std::sync::OnceLock;
 
-use super::{NumaNode, NumaError, Result, MAX_NUMA_NODES};
+use super::{NumaNode, Result, MAX_NUMA_NODES};
 
 /// Global topology instance
 #[cfg(feature = "std")]
