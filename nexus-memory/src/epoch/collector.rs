@@ -66,6 +66,8 @@ const GC_FREQUENCY: u64 = 128;
 #[cfg(feature = "std")]
 const STRAGGLER_TIMEOUT_MICROS: u64 = 100;
 
+const MAX_LOCAL_GARBAGE: usize = 1024;
+
 /// The global garbage collector
 ///
 /// `Collector` coordinates epoch-based garbage collection across multiple threads.
@@ -486,21 +488,40 @@ impl Collector {
     ///     /\ retired' = retired @@ (obj :> epoch)
     /// ```
     pub(crate) unsafe fn defer<T>(&self, ptr: *mut T) {
-        // SAFETY: SeqCst ensures we read the current epoch consistently.
-        // This is the retirement epoch that will be compared against during reclamation.
-        let epoch = self.global_epoch.load(Ordering::SeqCst);
-        let bag_idx = (epoch % 4) as usize;
-        
-        // SAFETY: Verified by TLA+ action 'Retire'.
-        // We're adding to the current epoch's garbage bag. This is safe because:
-        // 1. The caller (via Guard) ensures they have ownership of the object
-        // 2. The object will not be reclaimed until epoch + GracePeriod
-        // 3. The rotating bag design (4 bags) ensures we never collect while adding
-        //
-        // Note: Concurrent additions to the same bag are handled by the bag's
-        // internal synchronization (or by being thread-local in practice).
-        let bag = unsafe { &mut *get_mut_ptr(&self.garbage[bag_idx]) };
-        unsafe { bag.defer(ptr) };
+        // BOUNDED MEMORY (Section 7.3): Enforce TLA+ MaxGarbage constraint.
+        // This loop implements backpressure when garbage bags are full,
+        // sacrificing wait-freedom for bounded memory guarantees.
+        loop {
+            // SAFETY: SeqCst ensures we read the current epoch consistently.
+            let epoch = self.global_epoch.load(Ordering::SeqCst);
+            let bag_idx = (epoch % 4) as usize;
+            
+            // SAFETY: Verified by TLA+ action 'Retire'.
+            let bag = unsafe { &mut *get_mut_ptr(&self.garbage[bag_idx]) };
+            
+            // Check if bag has space (enforces MaxGarbage from TLA+ spec)
+            if bag.len() < MAX_LOCAL_GARBAGE {
+                // SAFETY: Caller guarantees pointer validity
+                unsafe { bag.defer(ptr) };
+                return;
+            }
+            
+            // Bag is full - apply backpressure strategy
+            // This sacrifices "Wait-Free" for "Bounded Memory", aligning with
+            // TLA+ constraints where Retire is guarded by capacity.
+            //
+            // SAFETY WARNING: In production, this could cause livelock if all
+            // bags are full and no thread can advance the epoch. The epoch
+            // freeze mechanism (Section 7.3) helps mitigate this.
+            self.try_advance_and_collect();
+            
+            // Yield to allow other threads to make progress
+            #[cfg(feature = "std")]
+            std::thread::yield_now();
+            
+            #[cfg(not(feature = "std"))]
+            core::hint::spin_loop();
+        }
     }
 
     /// Gets or creates a participant slot for the current thread.
