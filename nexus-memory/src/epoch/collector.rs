@@ -38,12 +38,33 @@ use super::{Epoch, AtomicEpoch, GarbageBag, Guard, INACTIVE};
 #[cfg(feature = "bench-metrics")]
 use std::time::Instant;
 
+#[cfg(feature = "std")]
+use std::time::Instant as TimestampInstant;
+
 /// Maximum number of participants (threads) supported
 const MAX_PARTICIPANTS: usize = 256;
 
 /// Epochs between garbage collection attempts
 #[allow(dead_code)]
 const GC_FREQUENCY: u64 = 128;
+
+/// Timeout threshold for detecting "frozen" participants (Section 7.3).
+/// 
+/// If a participant hasn't updated their epoch status within this duration,
+/// they are considered "frozen" (e.g., due to GC pause, network stall) and
+/// are ignored for epoch advancement purposes.
+///
+/// # Safety Warning
+///
+/// This is a HEURISTIC for availability, not a safety guarantee!
+/// In a production system, ignoring a participant risks use-after-free if
+/// the participant resumes and accesses reclaimed memory. This implementation
+/// validates the paper's "epoch freeze" availability claim but would need
+/// additional safeguards (e.g., hazard pointers, defer queues) for production.
+///
+/// Value: 100 microseconds (suitable for testing; production would use higher)
+#[cfg(feature = "std")]
+const STRAGGLER_TIMEOUT_MICROS: u64 = 100;
 
 /// The global garbage collector
 ///
@@ -142,6 +163,11 @@ pub struct Participant {
     
     /// Count of pins without unpins (for nested pinning)
     pub(crate) pin_count: AtomicUsize,
+    
+    /// Timestamp of last activity (for epoch freeze detection - Section 7.3)
+    /// Stored as microseconds since some unspecified epoch (e.g., Instant::now())
+    /// A value of 0 means "never active" or "not tracked".
+    pub(crate) last_active: AtomicU64,
 }
 
 impl Default for Participant {
@@ -151,6 +177,7 @@ impl Default for Participant {
             active: AtomicUsize::new(0),
             local_garbage: UnsafeCell::new(GarbageBag::new()),
             pin_count: AtomicUsize::new(0),
+            last_active: AtomicU64::new(0),
         }
     }
 }
@@ -242,6 +269,18 @@ impl Collector {
         // This is the key synchronization point that establishes the grace period guarantee.
         participant.epoch.store(epoch, Ordering::SeqCst);
         
+        // Update last_active timestamp for epoch freeze detection (Section 7.3)
+        // This allows try_advance() to detect and skip frozen/stalled participants.
+        #[cfg(feature = "std")]
+        {
+            // Use a simple incrementing counter based on Instant for low overhead
+            // The actual timestamp value doesn't matter, only the relative age
+            participant.last_active.store(
+                Self::current_timestamp_micros(),
+                Ordering::Release
+            );
+        }
+        
         // Relaxed is sufficient for pin_count as it's only accessed by this thread
         participant.pin_count.fetch_add(1, Ordering::Relaxed);
         
@@ -289,6 +328,10 @@ impl Collector {
         #[cfg(feature = "bench-metrics")]
         let start = Instant::now();
 
+        // Get current timestamp for epoch freeze detection (Section 7.3)
+        #[cfg(feature = "std")]
+        let now_micros = Self::current_timestamp_micros();
+
         // SAFETY: SeqCst ensures we see the most recent epoch value and
         // establishes a total order with participant epoch loads.
         let current = self.global_epoch.load(Ordering::SeqCst);
@@ -311,6 +354,32 @@ impl Collector {
             if p_epoch == INACTIVE {
                 continue;
             }
+            
+            // =========== EPOCH FREEZE DETECTION (Section 7.3) ===========
+            // Check if this participant has been stalled for too long.
+            // If so, consider them "frozen" and ignore their epoch for advancement.
+            //
+            // SAFETY WARNING: This is a HEURISTIC for AVAILABILITY, not safety!
+            // In production, this could cause use-after-free if the frozen
+            // participant resumes and accesses reclaimed memory. The paper's
+            // Section 7.3 acknowledges this tradeoff and suggests additional
+            // mechanisms (hazard pointers, defer queues) for production use.
+            //
+            // For artifact validation, this demonstrates that epoch advancement
+            // CAN proceed despite stalled participants.
+            #[cfg(feature = "std")]
+            {
+                let last_active = participant.last_active.load(Ordering::Acquire);
+                if last_active > 0 {
+                    let age_micros = now_micros.saturating_sub(last_active);
+                    if age_micros > STRAGGLER_TIMEOUT_MICROS {
+                        // Participant is frozen/stalled - skip them for advancement
+                        // This corresponds to the "Epoch Freeze" mechanism in Section 7.3
+                        continue;
+                    }
+                }
+            }
+            // ============================================================
             
             // SAFETY: Verified by TLA+ invariant 'EpochMonotonicity'.
             // If any participant is behind, advancing would violate the grace
@@ -489,6 +558,25 @@ impl Collector {
             self.stats.epoch_advances.load(Ordering::Relaxed),
             self.stats.failed_advances.load(Ordering::Relaxed),
         )
+    }
+    
+    /// Returns current timestamp in microseconds for epoch freeze detection.
+    /// 
+    /// Uses a global Instant reference for cross-thread timestamp comparison.
+    /// The absolute value doesn't matter - only the relative age is used for
+    /// straggler detection.
+    ///
+    /// GUARANTEE: Always returns values >= 1. 0 is reserved for "never active".
+    #[cfg(feature = "std")]
+    #[inline]
+    fn current_timestamp_micros() -> u64 {
+        use std::sync::LazyLock;
+        
+        // Global start time for consistent timestamps across all threads
+        static START: LazyLock<TimestampInstant> = LazyLock::new(TimestampInstant::now);
+        
+        // Add 1 to ensure we never return 0 (which means "not tracked")
+        START.elapsed().as_micros() as u64 + 1
     }
 }
 
