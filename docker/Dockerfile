@@ -26,15 +26,31 @@ RUN apt-get update && apt-get install -y \
 # Create workspace
 WORKDIR /workspace
 
-# Copy source files
+# Copy Cargo manifests first for dependency caching (layer optimization)
+COPY Cargo.toml Cargo.lock ./
+COPY nexus-memory/Cargo.toml ./nexus-memory/
+COPY nexus-benchmarks/Cargo.toml ./nexus-benchmarks/
+COPY nexus-validation/Cargo.toml ./nexus-validation/
+COPY nexus-verification/Cargo.toml ./nexus-verification/
+
+# Create dummy source files to cache dependencies
+RUN mkdir -p nexus-memory/src nexus-benchmarks/src nexus-validation/src nexus-verification/src && \
+    echo "fn main() {}" > nexus-memory/src/lib.rs && \
+    echo "fn main() {}" > nexus-benchmarks/src/lib.rs && \
+    echo "fn main() {}" > nexus-validation/src/lib.rs && \
+    echo "fn main() {}" > nexus-verification/src/lib.rs && \
+    cargo fetch || true
+
+# Copy actual source files (invalidates cache only if source changes)
 COPY nexus-memory/ ./nexus-memory/
 COPY nexus-benchmarks/ ./nexus-benchmarks/
 COPY nexus-validation/ ./nexus-validation/
+COPY nexus-verification/ ./nexus-verification/
 COPY baselines/ ./baselines/
+COPY formal-verification/ ./formal-verification/
 
 # Build release binaries
-RUN cd nexus-memory && cargo build --release
-RUN cd nexus-benchmarks && cargo build --release 2>/dev/null || true
+RUN cargo build --release 2>/dev/null || true
 
 # Build baselines
 RUN cd baselines && \
@@ -72,22 +88,23 @@ RUN pip install --no-cache-dir \
 WORKDIR /workspace
 
 # Copy built artifacts from builder
-COPY --from=builder /workspace/nexus-memory/target/release/ ./nexus-memory/target/release/
-COPY --from=builder /workspace/baselines/crossbeam-comparison ./baselines/
-COPY --from=builder /workspace/baselines/hazard-pointer-baseline ./baselines/
-COPY --from=builder /workspace/baselines/rcu-baseline ./baselines/
+COPY --from=builder /workspace/target/release/ ./target/release/
+COPY --from=builder /workspace/baselines/crossbeam-comparison ./baselines/ 2>/dev/null || true
+COPY --from=builder /workspace/baselines/hazard-pointer-baseline ./baselines/ 2>/dev/null || true
+COPY --from=builder /workspace/baselines/rcu-baseline ./baselines/ 2>/dev/null || true
 
-# Copy source and scripts
+# Copy source, scripts, and documentation
+COPY Cargo.toml Cargo.lock ./
 COPY nexus-memory/ ./nexus-memory/
 COPY nexus-benchmarks/ ./nexus-benchmarks/
 COPY nexus-validation/ ./nexus-validation/
+COPY nexus-verification/ ./nexus-verification/
 COPY baselines/ ./baselines/
+COPY formal-verification/ ./formal-verification/
 COPY scripts/ ./scripts/
-COPY docs/ ./docs/
-COPY README.md ./
-COPY LICENSE ./
+COPY README.md VALIDATION_REPORT.md reproducibility.md LICENSE ./
 
-# Make scripts executable
+# Make scripts executable (BEFORE CMD)
 RUN chmod +x scripts/*.sh
 
 # Create output directories
@@ -105,4 +122,4 @@ CMD ["./scripts/reproduce-all.sh", "--quick"]
 LABEL maintainer="nexus-memory@example.com"
 LABEL version="1.0"
 LABEL description="Nexus Memory PVLDB 2026 Artifact Evaluation"
-LABEL org.opencontainers.image.source="https://github.com/nexus-memory/nexus"
+LABEL org.opencontainers.image.source="https://github.com/TensorScholar/nexus-memory"
