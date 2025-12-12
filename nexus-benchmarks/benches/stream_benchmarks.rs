@@ -9,15 +9,14 @@
 //! - Memory: Zero-copy streaming with bounded buffers
 
 use criterion::{
-    black_box, criterion_group, criterion_main,
-    BenchmarkId, Criterion, BatchSize, Throughput,
+    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
 };
 
 use std::{
     collections::VecDeque,
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
 };
@@ -117,10 +116,7 @@ impl<T> TumblingWindow<T> {
     pub fn add(&mut self, item: T) -> Option<Vec<T>> {
         self.buffer.push(item);
         if self.buffer.len() >= self.window_size {
-            let batch = std::mem::replace(
-                &mut self.buffer,
-                Vec::with_capacity(self.window_size),
-            );
+            let batch = std::mem::replace(&mut self.buffer, Vec::with_capacity(self.window_size));
             Some(batch)
         } else {
             None
@@ -145,7 +141,8 @@ impl<T> SessionWindow<T> {
     }
 
     pub fn add(&mut self, item: T, timestamp: Instant) -> Option<Vec<T>> {
-        let should_emit = self.last_activity
+        let should_emit = self
+            .last_activity
             .map(|last| timestamp.duration_since(last) > self.gap_duration)
             .unwrap_or(false);
 
@@ -230,17 +227,17 @@ impl HierarchicalStreamProcessor {
         F: Fn(&T) -> U,
     {
         let mut results = Vec::with_capacity(items.len());
-        
+
         for item in items.iter() {
             results.push(f(item));
-            
+
             // Hierarchical epoch advancement
             let count = self.processed_count.fetch_add(1, Ordering::Relaxed);
             if count % self.sync_interval == 0 {
                 self.epoch.fetch_add(1, Ordering::Release);
             }
         }
-        
+
         results
     }
 
@@ -269,15 +266,15 @@ impl FlatEpochProcessor {
         F: Fn(&T) -> U,
     {
         let mut results = Vec::with_capacity(items.len());
-        
+
         for item in items {
             results.push(f(item));
-            
+
             // Flat epoch: sync on every item
             self.epoch.fetch_add(1, Ordering::Release);
             self.processed_count.fetch_add(1, Ordering::Relaxed);
         }
-        
+
         results
     }
 }
@@ -300,17 +297,17 @@ fn generate_stream_data(size: usize) -> Vec<f64> {
 
 fn bench_stream_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("stream_throughput");
-    
+
     for size in [1_000, 10_000, 100_000, 1_000_000] {
         group.throughput(Throughput::Elements(size as u64));
-        
+
         // NEXUS hierarchical epoch processing
         group.bench_with_input(
             BenchmarkId::new("nexus_hierarchical", size),
             &size,
             |b, &size| {
                 let processor = HierarchicalStreamProcessor::new(1024);
-                
+
                 b.iter_batched(
                     || generate_stream_data(size),
                     |data| {
@@ -321,14 +318,14 @@ fn bench_stream_throughput(c: &mut Criterion) {
                 )
             },
         );
-        
+
         // Flat epoch baseline
         group.bench_with_input(
             BenchmarkId::new("flat_epoch_baseline", size),
             &size,
             |b, &size| {
                 let processor = FlatEpochProcessor::new();
-                
+
                 b.iter_batched(
                     || generate_stream_data(size),
                     |data| {
@@ -339,7 +336,7 @@ fn bench_stream_throughput(c: &mut Criterion) {
                 )
             },
         );
-        
+
         // Simple iterator (no epoch overhead)
         group.bench_with_input(
             BenchmarkId::new("iterator_baseline", size),
@@ -356,16 +353,16 @@ fn bench_stream_throughput(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
 fn bench_window_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("window_operations");
-    
+
     for window_size in [10, 100, 1000] {
         let stream_size = 100_000;
-        
+
         // Sliding window
         group.bench_with_input(
             BenchmarkId::new("sliding_window", window_size),
@@ -376,19 +373,19 @@ fn bench_window_operations(c: &mut Criterion) {
                     |data| {
                         let mut window: SlidingWindow<f64> = SlidingWindow::new(window_size);
                         let mut sum = 0.0;
-                        
+
                         for item in data {
                             window.add(item);
                             sum += window_aggregate(window.contents(), 0.0, |acc, x| acc + x);
                         }
-                        
+
                         black_box(sum)
                     },
                     BatchSize::LargeInput,
                 )
             },
         );
-        
+
         // Tumbling window
         group.bench_with_input(
             BenchmarkId::new("tumbling_window", window_size),
@@ -399,14 +396,14 @@ fn bench_window_operations(c: &mut Criterion) {
                     |data| {
                         let mut window: TumblingWindow<f64> = TumblingWindow::new(window_size);
                         let mut batch_count = 0;
-                        
+
                         for item in data {
                             if let Some(batch) = window.add(item) {
                                 let _sum: f64 = batch.iter().sum();
                                 batch_count += 1;
                             }
                         }
-                        
+
                         black_box(batch_count)
                     },
                     BatchSize::LargeInput,
@@ -414,16 +411,16 @@ fn bench_window_operations(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
 fn bench_stream_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("stream_operations");
     let size = 100_000;
-    
+
     group.throughput(Throughput::Elements(size as u64));
-    
+
     // Map operation
     group.bench_function("map", |b| {
         b.iter_batched(
@@ -435,7 +432,7 @@ fn bench_stream_operations(c: &mut Criterion) {
             BatchSize::LargeInput,
         )
     });
-    
+
     // Filter operation
     group.bench_function("filter", |b| {
         b.iter_batched(
@@ -447,7 +444,7 @@ fn bench_stream_operations(c: &mut Criterion) {
             BatchSize::LargeInput,
         )
     });
-    
+
     // Reduce operation
     group.bench_function("reduce", |b| {
         b.iter_batched(
@@ -459,7 +456,7 @@ fn bench_stream_operations(c: &mut Criterion) {
             BatchSize::LargeInput,
         )
     });
-    
+
     // Map + Filter + Reduce pipeline
     group.bench_function("pipeline", |b| {
         b.iter_batched(
@@ -473,13 +470,13 @@ fn bench_stream_operations(c: &mut Criterion) {
             BatchSize::LargeInput,
         )
     });
-    
+
     group.finish();
 }
 
 fn bench_backpressure(c: &mut Criterion) {
     let mut group = c.benchmark_group("backpressure");
-    
+
     for buffer_size in [100, 1000, 10000] {
         group.bench_with_input(
             BenchmarkId::new("bounded_buffer", buffer_size),
@@ -489,16 +486,16 @@ fn bench_backpressure(c: &mut Criterion) {
                     let buffer: Arc<StreamBuffer<f64>> = Arc::new(StreamBuffer::new(buffer_size));
                     let mut produced = 0;
                     let mut consumed = 0;
-                    
+
                     // Simulate producer-consumer
                     for i in 0..buffer_size * 10 {
                         let value = (i as f64).sin();
-                        
+
                         // Producer
                         if buffer.push(value) {
                             produced += 1;
                         }
-                        
+
                         // Consumer (every other iteration)
                         if i % 2 == 0 {
                             if buffer.pop().is_some() {
@@ -506,22 +503,22 @@ fn bench_backpressure(c: &mut Criterion) {
                             }
                         }
                     }
-                    
+
                     black_box((produced, consumed))
                 })
             },
         );
     }
-    
+
     group.finish();
 }
 
 fn bench_latency_distribution(c: &mut Criterion) {
     let mut group = c.benchmark_group("latency");
     group.sample_size(1000);
-    
+
     let processor = HierarchicalStreamProcessor::new(64);
-    
+
     // Single-item latency
     group.bench_function("single_item_latency", |b| {
         b.iter(|| {
@@ -532,7 +529,7 @@ fn bench_latency_distribution(c: &mut Criterion) {
             black_box((result, latency))
         })
     });
-    
+
     // Batch latency
     group.bench_function("batch_latency_100", |b| {
         b.iter_batched(
@@ -546,7 +543,7 @@ fn bench_latency_distribution(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-    
+
     group.finish();
 }
 

@@ -75,30 +75,33 @@ fn run_comprehensive_verification() {
 
 fn verify_pointer_stability() {
     println!("## 1. Pointer Stability Verification");
-    println!("Validates that memory addresses remain strictly identical across paradigm transitions.\n");
+    println!(
+        "Validates that memory addresses remain strictly identical across paradigm transitions.\n"
+    );
 
     // 1. Setup
     println!("- Allocating {} MB buffer...", BUFFER_SIZE_MB);
     let buffer = ZeroCopyBuffer::<u64>::new(ELEMENT_COUNT);
-    
+
     // Fill data to ensure pages are committed
     for i in 0..ELEMENT_COUNT {
         buffer.push(i as u64).unwrap();
     }
-    
+
     let raw_ptr = buffer.as_ptr();
     println!("- Base allocation verification: OK");
     println!("  - Element count: {}", buffer.len());
     println!("  - Base Address: {:p}", raw_ptr);
 
     // 2. Batch Paradigm
-    let batch_view: ParadigmView<'_, u64, paradigm::Batch> = ParadigmView::new(raw_ptr, buffer.len());
+    let batch_view: ParadigmView<'_, u64, paradigm::Batch> =
+        ParadigmView::new(raw_ptr, buffer.len());
     let ptr_batch = batch_view.as_ptr();
-    
+
     // 3. Transition to Stream
     let stream_view: ParadigmView<'_, u64, paradigm::Stream> = transition(batch_view);
     let ptr_stream = stream_view.as_ptr();
-    
+
     // 4. Transition to Graph
     let graph_view: ParadigmView<'_, u64, paradigm::Graph> = transition(stream_view);
     let ptr_graph = graph_view.as_ptr();
@@ -110,7 +113,7 @@ fn verify_pointer_stability() {
     println!("- **Graph  Paradigm**: {:p}", ptr_graph);
 
     let stable = (ptr_batch == ptr_stream) && (ptr_stream == ptr_graph);
-    
+
     // Verify Data Integrity at random offsets
     let offsets = [0, ELEMENT_COUNT / 2, ELEMENT_COUNT - 1];
     let mut content_ok = true;
@@ -151,7 +154,7 @@ fn verify_page_faults() {
         for i in 0..ELEMENT_COUNT {
             buffer.push(i as u64).unwrap();
         }
-        
+
         // Touch pages to ensure they are resident
         unsafe {
             let ptr = buffer.as_ptr();
@@ -166,23 +169,28 @@ fn verify_page_faults() {
 
         // 2. Measure Baseline Faults
         let faults_before = get_minor_page_faults();
-        
+
         println!("- Baseline Minor Faults: {}", faults_before);
 
         // 3. Perform Transitions & Access
-        let batch_view: ParadigmView<'_, u64, paradigm::Batch> = ParadigmView::new(buffer.as_ptr(), buffer.len());
-        
+        let batch_view: ParadigmView<'_, u64, paradigm::Batch> =
+            ParadigmView::new(buffer.as_ptr(), buffer.len());
+
         // Transition Batch -> Stream
         let stream_view: ParadigmView<'_, u64, paradigm::Stream> = transition(batch_view);
-        
+
         // Touch data in new paradigm
-        unsafe { std::hint::black_box(*stream_view.as_ptr()); }
+        unsafe {
+            std::hint::black_box(*stream_view.as_ptr());
+        }
 
         // Transition Stream -> Graph
         let graph_view: ParadigmView<'_, u64, paradigm::Graph> = transition(stream_view);
-        
+
         // Touch data in new paradigm
-        unsafe { std::hint::black_box(*graph_view.as_ptr()); }
+        unsafe {
+            std::hint::black_box(*graph_view.as_ptr());
+        }
 
         // 4. Measure Post-Op Faults
         let faults_after = get_minor_page_faults();

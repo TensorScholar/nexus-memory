@@ -11,17 +11,16 @@
 //! - Memory allocation overhead
 
 use criterion::{
-    black_box, criterion_group, criterion_main,
-    BenchmarkId, Criterion, BatchSize, Throughput,
+    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
 };
 
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
     alloc::Layout,
     ptr::NonNull,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 // Constants for benchmarking
@@ -45,12 +44,10 @@ impl MemoryPool {
     pub fn allocate(&self, layout: Layout) -> Option<NonNull<u8>> {
         let size = layout.size() as u64;
         let old = self.allocated.fetch_add(size, Ordering::Relaxed);
-        
+
         if old + size <= self.capacity as u64 {
             // In real implementation, this would use proper allocation
-            let ptr = unsafe {
-                std::alloc::alloc(layout)
-            };
+            let ptr = unsafe { std::alloc::alloc(layout) };
             NonNull::new(ptr)
         } else {
             self.allocated.fetch_sub(size, Ordering::Relaxed);
@@ -69,10 +66,10 @@ fn generate_float_data(size: usize) -> Vec<f32> {
 /// Benchmark vectorized map operations
 fn bench_map(c: &mut Criterion) {
     let mut group = c.benchmark_group("batch_map");
-    
+
     for size in [1_000, 10_000, 100_000, 1_000_000] {
         group.throughput(Throughput::Elements(size as u64));
-        
+
         // Nexus-style chunked processing
         group.bench_with_input(
             BenchmarkId::new("nexus_chunked", size),
@@ -83,9 +80,7 @@ fn bench_map(c: &mut Criterion) {
                     |data| {
                         let output: Vec<f32> = data
                             .chunks(1024)
-                            .flat_map(|chunk| {
-                                chunk.iter().map(|&x| x * x + x.abs().sqrt())
-                            })
+                            .flat_map(|chunk| chunk.iter().map(|&x| x * x + x.abs().sqrt()))
                             .collect();
                         black_box(output)
                     },
@@ -93,7 +88,7 @@ fn bench_map(c: &mut Criterion) {
                 )
             },
         );
-        
+
         // Traditional scalar approach
         group.bench_with_input(
             BenchmarkId::new("baseline_scalar", size),
@@ -102,10 +97,8 @@ fn bench_map(c: &mut Criterion) {
                 b.iter_batched(
                     || generate_float_data(size),
                     |data| {
-                        let output: Vec<f32> = data
-                            .iter()
-                            .map(|&x| x * x + x.abs().sqrt())
-                            .collect();
+                        let output: Vec<f32> =
+                            data.iter().map(|&x| x * x + x.abs().sqrt()).collect();
                         black_box(output)
                     },
                     BatchSize::LargeInput,
@@ -113,17 +106,17 @@ fn bench_map(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
 /// Benchmark reduction operations
 fn bench_reduce(c: &mut Criterion) {
     let mut group = c.benchmark_group("batch_reduce");
-    
+
     for size in [10_000, 100_000, 1_000_000, 10_000_000] {
         group.throughput(Throughput::Elements(size as u64));
-        
+
         // Nexus-style chunked reduction
         group.bench_with_input(
             BenchmarkId::new("nexus_chunked_reduce", size),
@@ -142,7 +135,7 @@ fn bench_reduce(c: &mut Criterion) {
                 )
             },
         );
-        
+
         // Traditional sequential reduction
         group.bench_with_input(
             BenchmarkId::new("baseline_sequential", size),
@@ -159,17 +152,17 @@ fn bench_reduce(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
 /// Benchmark cache-aware algorithms
 fn bench_cache_aware(c: &mut Criterion) {
     let mut group = c.benchmark_group("batch_cache_aware");
-    
+
     for size in [64, 128, 256, 512] {
         group.throughput(Throughput::Elements((size * size) as u64));
-        
+
         // Cache-aware tiled matrix multiply
         group.bench_with_input(
             BenchmarkId::new("nexus_tiled_matmul", size),
@@ -184,7 +177,7 @@ fn bench_cache_aware(c: &mut Criterion) {
                     },
                     |(a, b, mut c, n)| {
                         const TILE: usize = 32;
-                        
+
                         for i_tile in (0..n).step_by(TILE) {
                             for j_tile in (0..n).step_by(TILE) {
                                 for k_tile in (0..n).step_by(TILE) {
@@ -205,7 +198,7 @@ fn bench_cache_aware(c: &mut Criterion) {
                 )
             },
         );
-        
+
         // Naive matrix multiply for comparison
         group.bench_with_input(
             BenchmarkId::new("baseline_naive_matmul", size),
@@ -235,30 +228,26 @@ fn bench_cache_aware(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
 /// Benchmark memory allocation patterns
 fn bench_allocation(c: &mut Criterion) {
     let mut group = c.benchmark_group("batch_allocation");
-    
+
     for size in [1_000, 10_000, 100_000] {
         // Pool-based allocation
-        group.bench_with_input(
-            BenchmarkId::new("nexus_pool", size),
-            &size,
-            |b, &size| {
-                let pool = Arc::new(MemoryPool::new(1 << 30));
-                
-                b.iter(|| {
-                    let layout = Layout::array::<f32>(*size).unwrap();
-                    let ptr = pool.allocate(layout);
-                    black_box(ptr)
-                })
-            },
-        );
-        
+        group.bench_with_input(BenchmarkId::new("nexus_pool", size), &size, |b, &size| {
+            let pool = Arc::new(MemoryPool::new(1 << 30));
+
+            b.iter(|| {
+                let layout = Layout::array::<f32>(*size).unwrap();
+                let ptr = pool.allocate(layout);
+                black_box(ptr)
+            })
+        });
+
         // Standard allocation
         group.bench_with_input(
             BenchmarkId::new("baseline_alloc", size),
@@ -271,7 +260,7 @@ fn bench_allocation(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 

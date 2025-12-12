@@ -30,8 +30,8 @@
 //! ∀ ref: ZeroCopyRef<'buf, 'p, T>. 'buf ≤ 'ref ∧ 'p ≤ 'ref
 
 use core::marker::PhantomData;
-use core::ptr::NonNull;
 use core::ops::{Deref, DerefMut};
+use core::ptr::NonNull;
 
 /// A phantom lifetime marker for compile-time safety.
 ///
@@ -122,10 +122,10 @@ impl<'a> Default for PhantomLifetime<'a> {
 pub struct ZeroCopyRef<'buf, 'scope, T: ?Sized> {
     /// Pointer to the data
     ptr: NonNull<T>,
-    
+
     /// Buffer lifetime marker
     _buffer: PhantomData<&'buf T>,
-    
+
     /// Scope lifetime marker
     _scope: PhantomData<&'scope ()>,
 }
@@ -240,10 +240,10 @@ unsafe impl<'buf, 'scope, T: Sync + ?Sized> Sync for ZeroCopyRef<'buf, 'scope, T
 pub struct ZeroCopyMut<'buf, 'scope, T: ?Sized> {
     /// Pointer to the data
     ptr: NonNull<T>,
-    
+
     /// Buffer lifetime marker
     _buffer: PhantomData<&'buf mut T>,
-    
+
     /// Scope lifetime marker  
     _scope: PhantomData<&'scope mut ()>,
 }
@@ -449,7 +449,7 @@ mod tests {
     fn test_zero_copy_ref() {
         let data = 42i32;
         let r = ZeroCopyRef::from_ref(&data);
-        
+
         assert_eq!(*r, 42);
     }
 
@@ -457,9 +457,9 @@ mod tests {
     fn test_zero_copy_mut() {
         let mut data = 42i32;
         let mut r = ZeroCopyMut::from_mut(&mut data);
-        
+
         *r = 100;
-        
+
         assert_eq!(data, 100);
     }
 
@@ -467,7 +467,7 @@ mod tests {
     fn test_downgrade() {
         let mut data = 42i32;
         let r = ZeroCopyMut::from_mut(&mut data);
-        
+
         let immut = r.downgrade();
         assert_eq!(*immut, 42);
     }
@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn test_scoped_region() {
         let data = vec![1, 2, 3, 4, 5];
-        
+
         ScopedRegion::new(|_scope| {
             let sum: i32 = data.iter().sum();
             assert_eq!(sum, 15);
@@ -486,7 +486,7 @@ mod tests {
     fn test_slice_ref() {
         let data = [1, 2, 3, 4, 5];
         let r: ZeroCopyRef<'_, '_, [i32]> = ZeroCopyRef::from_ref(&data[..]);
-        
+
         assert_eq!(r.len(), 5);
         assert_eq!(r[0], 1);
     }

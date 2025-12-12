@@ -23,12 +23,12 @@
 
 #![cfg(loom)]
 
+use loom::sync::atomic::{AtomicBool, Ordering};
 use loom::sync::Arc;
 use loom::thread;
-use loom::sync::atomic::{AtomicBool, Ordering};
 
 // Import REAL production structs for verification
-use nexus_memory::epoch::{HierarchicalEpoch, Collector, INACTIVE};
+use nexus_memory::epoch::{Collector, HierarchicalEpoch, INACTIVE};
 
 // ============================================================================
 // Core Verification Tests - HierarchicalEpoch (2-thread exhaustive)
@@ -145,9 +145,7 @@ fn loom_test_04_pin_advance_race() {
             epoch
         });
 
-        let advancer = thread::spawn(move || {
-            c2.try_advance()
-        });
+        let advancer = thread::spawn(move || c2.try_advance());
 
         pinner.join().unwrap();
         advancer.join().unwrap();
@@ -175,7 +173,7 @@ fn loom_test_05_epoch_monotonicity() {
 
         t0.join().unwrap();
         t1.join().unwrap();
-        
+
         // Final epoch should be >= initial (0)
         assert!(coll.epoch() >= 0);
     });

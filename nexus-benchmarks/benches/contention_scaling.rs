@@ -69,22 +69,25 @@ struct FlatEpochCollector {
 impl FlatEpochCollector {
     fn new(num_participants: usize) -> Self {
         let epochs = Box::new(std::array::from_fn(|_| AtomicU64::new(INACTIVE)));
-        Self { epochs, num_participants }
+        Self {
+            epochs,
+            num_participants,
+        }
     }
-    
+
     /// Register a participant with an epoch value
     fn set_epoch(&self, id: usize, epoch: u64) {
         self.epochs[id].store(epoch, Ordering::Release);
     }
-    
+
     /// Compute global minimum - O(T) operation
-    /// 
+    ///
     /// This MUST scan ALL participants to find the minimum epoch.
     /// This is the critical performance bottleneck in flat schemes.
     #[inline(never)]
     fn global_minimum(&self) -> u64 {
         let mut min = INACTIVE;
-        
+
         // O(T) scan - must check every participant
         for i in 0..self.num_participants {
             let epoch = self.epochs[i].load(Ordering::Acquire);
@@ -92,7 +95,7 @@ impl FlatEpochCollector {
                 min = epoch;
             }
         }
-        
+
         min
     }
 }
@@ -101,37 +104,43 @@ fn main() {
     eprintln!("O(T) vs O(log T) Global Minimum Query Benchmark");
     eprintln!("================================================\n");
     eprintln!("Measuring global_minimum() latency vs participant count\n");
-    
+
     println!("type,threads,ops,latency_ns,throughput_mops");
-    
+
     let mut all_results = Vec::new();
-    
+
     for &num_participants in THREAD_COUNTS {
         eprintln!("Participants: {}", num_participants);
-        
+
         // --- Baseline: Flat O(T) scan ---
         let baseline_result = run_flat_benchmark(num_participants);
         println!("{}", baseline_result.to_csv());
-        eprintln!("  Baseline (Flat O(T)):        {:.2} ns", baseline_result.avg_latency_ns);
+        eprintln!(
+            "  Baseline (Flat O(T)):        {:.2} ns",
+            baseline_result.avg_latency_ns
+        );
         all_results.push(baseline_result);
-        
+
         // --- Nexus: Hierarchical O(log T) ---
         let nexus_result = run_hierarchical_benchmark(num_participants);
         println!("{}", nexus_result.to_csv());
-        eprintln!("  Nexus (Hierarchical O(log T)): {:.2} ns", nexus_result.avg_latency_ns);
-        
+        eprintln!(
+            "  Nexus (Hierarchical O(log T)): {:.2} ns",
+            nexus_result.avg_latency_ns
+        );
+
         // Calculate speedup
         let speedup = all_results.last().unwrap().avg_latency_ns / nexus_result.avg_latency_ns;
         eprintln!("  Speedup: {:.2}x\n", speedup);
-        
+
         all_results.push(nexus_result);
     }
-    
+
     // Summary
     eprintln!("\n--- Summary ---");
     eprintln!("Baseline (Flat): O(T) scan grows linearly with participant count");
     eprintln!("Nexus (Hierarchical): O(log T) tree read grows logarithmically");
-    
+
     // Export to CSV file
     export_csv(&all_results);
 }
@@ -139,32 +148,32 @@ fn main() {
 /// Baseline: Flat epoch collector with O(T) global minimum query
 fn run_flat_benchmark(num_participants: usize) -> BenchResult {
     let collector = FlatEpochCollector::new(num_participants);
-    
+
     // Setup: Register all participants with varying epochs
     for i in 0..num_participants {
         // Assign epochs 1, 2, 3, ... so minimum is always 1
         collector.set_epoch(i, (i + 1) as u64);
     }
-    
+
     // Warmup
     for _ in 0..1000 {
         std::hint::black_box(collector.global_minimum());
     }
-    
+
     // Measurement: Time global_minimum() queries
     let start = Instant::now();
     let mut sum = 0u64;
-    
+
     for _ in 0..QUERIES_PER_MEASUREMENT {
         sum = sum.wrapping_add(collector.global_minimum());
     }
-    
+
     let elapsed = start.elapsed();
     std::hint::black_box(sum); // Prevent optimization
-    
+
     let total_ops = QUERIES_PER_MEASUREMENT as u64;
     let elapsed_ns = elapsed.as_nanos() as f64;
-    
+
     BenchResult {
         bench_type: "baseline",
         threads: num_participants,
@@ -178,32 +187,32 @@ fn run_flat_benchmark(num_participants: usize) -> BenchResult {
 fn run_hierarchical_benchmark(num_participants: usize) -> BenchResult {
     let capacity = num_participants.next_power_of_two().max(4);
     let hier_epoch = HierarchicalEpoch::new(capacity);
-    
+
     // Setup: Register all participants with varying epochs
     for i in 0..num_participants {
         // Assign epochs 1, 2, 3, ... so minimum is always 1
         hier_epoch.update_local(i, (i + 1) as u64);
     }
-    
+
     // Warmup
     for _ in 0..1000 {
         std::hint::black_box(hier_epoch.global_minimum());
     }
-    
+
     // Measurement: Time global_minimum() queries
     let start = Instant::now();
     let mut sum = 0u64;
-    
+
     for _ in 0..QUERIES_PER_MEASUREMENT {
         sum = sum.wrapping_add(hier_epoch.global_minimum());
     }
-    
+
     let elapsed = start.elapsed();
     std::hint::black_box(sum); // Prevent optimization
-    
+
     let total_ops = QUERIES_PER_MEASUREMENT as u64;
     let elapsed_ns = elapsed.as_nanos() as f64;
-    
+
     BenchResult {
         bench_type: "nexus",
         threads: num_participants,
@@ -216,7 +225,7 @@ fn run_hierarchical_benchmark(num_participants: usize) -> BenchResult {
 /// Export results to CSV file compatible with plot_scaling_theory.py
 fn export_csv(results: &[BenchResult]) {
     use std::io::Write;
-    
+
     let filename = "contention_scaling_results.csv";
     let mut file = match std::fs::File::create(filename) {
         Ok(f) => f,
@@ -225,13 +234,13 @@ fn export_csv(results: &[BenchResult]) {
             return;
         }
     };
-    
+
     // Header compatible with plot_scaling_theory.py
     writeln!(file, "type,threads,ops,latency_ns,throughput_mops").unwrap();
-    
+
     for r in results {
         writeln!(file, "{}", r.to_csv()).unwrap();
     }
-    
+
     eprintln!("\nResults exported to {}", filename);
 }

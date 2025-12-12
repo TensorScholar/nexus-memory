@@ -48,33 +48,26 @@ mod buffer;
 mod phantom;
 
 pub use buffer::{ZeroCopyBuffer, ZeroCopyBufferBuilder};
-pub use phantom::{PhantomLifetime, ZeroCopyRef, ZeroCopyMut};
-
+pub use phantom::{PhantomLifetime, ZeroCopyMut, ZeroCopyRef};
 
 /// Error types for zero-copy operations
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZeroCopyError {
     /// Buffer allocation failed
     AllocationFailed,
-    
+
     /// Invalid alignment for the requested type
     InvalidAlignment,
-    
+
     /// Attempted to borrow while already mutably borrowed
     BorrowConflict,
-    
+
     /// Index out of bounds
-    OutOfBounds {
-        index: usize,
-        len: usize,
-    },
-    
+    OutOfBounds { index: usize, len: usize },
+
     /// Buffer is not large enough
-    InsufficientCapacity {
-        required: usize,
-        available: usize,
-    },
-    
+    InsufficientCapacity { required: usize, available: usize },
+
     /// Invalid region specification
     InvalidRegion,
 }
@@ -86,10 +79,21 @@ impl core::fmt::Display for ZeroCopyError {
             ZeroCopyError::InvalidAlignment => write!(f, "invalid memory alignment"),
             ZeroCopyError::BorrowConflict => write!(f, "buffer already mutably borrowed"),
             ZeroCopyError::OutOfBounds { index, len } => {
-                write!(f, "index {} out of bounds for buffer of length {}", index, len)
+                write!(
+                    f,
+                    "index {} out of bounds for buffer of length {}",
+                    index, len
+                )
             }
-            ZeroCopyError::InsufficientCapacity { required, available } => {
-                write!(f, "insufficient capacity: required {}, available {}", required, available)
+            ZeroCopyError::InsufficientCapacity {
+                required,
+                available,
+            } => {
+                write!(
+                    f,
+                    "insufficient capacity: required {}, available {}",
+                    required, available
+                )
             }
             ZeroCopyError::InvalidRegion => write!(f, "invalid region specification"),
         }
@@ -175,7 +179,7 @@ mod tests {
         let r1 = Region::new(0, 10);
         let r2 = Region::new(5, 10);
         let r3 = Region::new(10, 5);
-        
+
         assert!(r1.overlaps(&r2));
         assert!(!r1.overlaps(&r3));
     }
@@ -185,7 +189,7 @@ mod tests {
         let outer = Region::new(0, 100);
         let inner = Region::new(10, 20);
         let outside = Region::new(90, 20);
-        
+
         assert!(inner.contained_in(&outer));
         assert!(!outside.contained_in(&outer));
     }

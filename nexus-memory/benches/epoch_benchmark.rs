@@ -5,15 +5,12 @@
 //! - 2.1× throughput improvement over Crossbeam epochs
 //! - Bounded memory overhead independent of thread count
 
-use criterion::{
-    black_box, criterion_group, criterion_main,
-    BenchmarkId, Criterion, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc,
     },
     thread,
     time::Duration,
@@ -24,7 +21,7 @@ use std::{
 // ============================================================================
 
 /// Hierarchical epoch collector (NEXUS approach)
-/// 
+///
 /// Uses a tree of epoch counters to achieve O(log T) synchronization
 /// where T is the number of active threads.
 pub struct HierarchicalEpochCollector {
@@ -58,14 +55,17 @@ impl HierarchicalEpochCollector {
         if thread_id < self.local_epochs.len() {
             self.local_epochs[thread_id].store(epoch, Ordering::Release);
         }
-        EpochGuard { collector: self, thread_id }
+        EpochGuard {
+            collector: self,
+            thread_id,
+        }
     }
 
     /// Try to advance the global epoch (O(log T) amortized)
     #[inline]
     pub fn try_advance(&self) {
         let ops = self.operations.fetch_add(1, Ordering::Relaxed);
-        
+
         // Hierarchical: only sync every sync_interval operations
         if ops % self.sync_interval == 0 {
             self.global_epoch.fetch_add(1, Ordering::AcqRel);
@@ -99,7 +99,7 @@ impl Drop for EpochGuard<'_> {
 }
 
 /// Flat epoch collector (baseline for comparison)
-/// 
+///
 /// Syncs on every operation - O(T) overhead per operation.
 pub struct FlatEpochCollector {
     global_epoch: AtomicU64,
@@ -120,7 +120,10 @@ impl FlatEpochCollector {
         if thread_id < self.local_epochs.len() {
             self.local_epochs[thread_id].store(epoch, Ordering::Release);
         }
-        FlatEpochGuard { collector: self, thread_id }
+        FlatEpochGuard {
+            collector: self,
+            thread_id,
+        }
     }
 
     /// Advance epoch on every operation - O(T) overhead
@@ -129,14 +132,14 @@ impl FlatEpochCollector {
         // Check all threads before advancing (O(T) operation)
         let current = self.global_epoch.load(Ordering::Acquire);
         let mut min_epoch = current;
-        
+
         for local in &self.local_epochs {
             let local_epoch = local.load(Ordering::Acquire);
             if local_epoch < min_epoch && local_epoch != u64::MAX {
                 min_epoch = local_epoch;
             }
         }
-        
+
         // Only advance if safe
         if min_epoch >= current {
             self.global_epoch.fetch_add(1, Ordering::AcqRel);
@@ -182,7 +185,7 @@ fn simulate_work(iterations: usize) -> u64 {
 
 fn bench_epoch_pinning(c: &mut Criterion) {
     let mut group = c.benchmark_group("epoch_pinning");
-    
+
     for thread_count in [1, 2, 4, 8, 16] {
         // Hierarchical epoch pinning
         group.bench_with_input(
@@ -190,7 +193,7 @@ fn bench_epoch_pinning(c: &mut Criterion) {
             &thread_count,
             |b, &thread_count| {
                 let collector = HierarchicalEpochCollector::new(thread_count, 1024);
-                
+
                 b.iter(|| {
                     let guard = collector.pin(0);
                     black_box(&guard);
@@ -198,14 +201,14 @@ fn bench_epoch_pinning(c: &mut Criterion) {
                 })
             },
         );
-        
+
         // Flat epoch pinning
         group.bench_with_input(
             BenchmarkId::new("flat", thread_count),
             &thread_count,
             |b, &thread_count| {
                 let collector = FlatEpochCollector::new(thread_count);
-                
+
                 b.iter(|| {
                     let guard = collector.pin(0);
                     black_box(&guard);
@@ -214,23 +217,23 @@ fn bench_epoch_pinning(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
 fn bench_epoch_advancement(c: &mut Criterion) {
     let mut group = c.benchmark_group("epoch_advancement");
-    
+
     for operations in [1_000, 10_000, 100_000] {
         group.throughput(Throughput::Elements(operations as u64));
-        
+
         // Hierarchical advancement (O(log T) amortized)
         group.bench_with_input(
             BenchmarkId::new("hierarchical", operations),
             &operations,
             |b, &operations| {
                 let collector = HierarchicalEpochCollector::new(8, 1024);
-                
+
                 b.iter(|| {
                     for _ in 0..operations {
                         collector.try_advance();
@@ -239,14 +242,14 @@ fn bench_epoch_advancement(c: &mut Criterion) {
                 })
             },
         );
-        
+
         // Flat advancement (O(T) per operation)
         group.bench_with_input(
             BenchmarkId::new("flat", operations),
             &operations,
             |b, &operations| {
                 let collector = FlatEpochCollector::new(8);
-                
+
                 b.iter(|| {
                     for _ in 0..operations {
                         collector.advance();
@@ -256,23 +259,23 @@ fn bench_epoch_advancement(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
 fn bench_sync_interval_sensitivity(c: &mut Criterion) {
     let mut group = c.benchmark_group("sync_interval");
     let operations = 100_000;
-    
+
     group.throughput(Throughput::Elements(operations as u64));
-    
+
     for sync_interval in [1, 10, 100, 1000, 10000] {
         group.bench_with_input(
             BenchmarkId::new("interval", sync_interval),
             &sync_interval,
             |b, &sync_interval| {
                 let collector = HierarchicalEpochCollector::new(8, sync_interval);
-                
+
                 b.iter(|| {
                     for _ in 0..operations {
                         collector.try_advance();
@@ -282,20 +285,20 @@ fn bench_sync_interval_sensitivity(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
 fn bench_concurrent_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_throughput");
     group.measurement_time(Duration::from_secs(5));
-    
+
     for thread_count in [1, 2, 4, 8] {
         let operations_per_thread = 10_000;
         let total_ops = operations_per_thread * thread_count;
-        
+
         group.throughput(Throughput::Elements(total_ops as u64));
-        
+
         // Hierarchical concurrent throughput
         group.bench_with_input(
             BenchmarkId::new("hierarchical", thread_count),
@@ -304,12 +307,12 @@ fn bench_concurrent_throughput(c: &mut Criterion) {
                 b.iter(|| {
                     let collector = Arc::new(HierarchicalEpochCollector::new(thread_count, 1024));
                     let counter = Arc::new(AtomicUsize::new(0));
-                    
+
                     let handles: Vec<_> = (0..thread_count)
                         .map(|tid| {
                             let collector = Arc::clone(&collector);
                             let counter = Arc::clone(&counter);
-                            
+
                             thread::spawn(move || {
                                 for _ in 0..operations_per_thread {
                                     let _guard = collector.pin(tid);
@@ -319,16 +322,16 @@ fn bench_concurrent_throughput(c: &mut Criterion) {
                             })
                         })
                         .collect();
-                    
+
                     for handle in handles {
                         handle.join().unwrap();
                     }
-                    
+
                     black_box(counter.load(Ordering::Relaxed))
                 })
             },
         );
-        
+
         // Flat concurrent throughput
         group.bench_with_input(
             BenchmarkId::new("flat", thread_count),
@@ -337,12 +340,12 @@ fn bench_concurrent_throughput(c: &mut Criterion) {
                 b.iter(|| {
                     let collector = Arc::new(FlatEpochCollector::new(thread_count));
                     let counter = Arc::new(AtomicUsize::new(0));
-                    
+
                     let handles: Vec<_> = (0..thread_count)
                         .map(|tid| {
                             let collector = Arc::clone(&collector);
                             let counter = Arc::clone(&counter);
-                            
+
                             thread::spawn(move || {
                                 for _ in 0..operations_per_thread {
                                     let _guard = collector.pin(tid);
@@ -352,28 +355,28 @@ fn bench_concurrent_throughput(c: &mut Criterion) {
                             })
                         })
                         .collect();
-                    
+
                     for handle in handles {
                         handle.join().unwrap();
                     }
-                    
+
                     black_box(counter.load(Ordering::Relaxed))
                 })
             },
         );
     }
-    
+
     group.finish();
 }
 
 fn bench_realistic_workload(c: &mut Criterion) {
     let mut group = c.benchmark_group("realistic_workload");
-    
+
     for thread_count in [1, 4, 8] {
         let operations = 10_000;
-        
+
         group.throughput(Throughput::Elements((operations * thread_count) as u64));
-        
+
         // Realistic workload with hierarchical epochs
         group.bench_with_input(
             BenchmarkId::new("hierarchical_realistic", thread_count),
@@ -381,19 +384,19 @@ fn bench_realistic_workload(c: &mut Criterion) {
             |b, &thread_count| {
                 b.iter(|| {
                     let collector = Arc::new(HierarchicalEpochCollector::new(thread_count, 256));
-                    
+
                     let handles: Vec<_> = (0..thread_count)
                         .map(|tid| {
                             let collector = Arc::clone(&collector);
-                            
+
                             thread::spawn(move || {
                                 let mut sum = 0u64;
                                 for i in 0..operations {
                                     let _guard = collector.pin(tid);
-                                    
+
                                     // Simulate realistic read/write pattern
                                     sum = sum.wrapping_add(simulate_work(10));
-                                    
+
                                     // Periodic sync
                                     if i % 100 == 0 {
                                         collector.try_advance();
@@ -403,17 +406,15 @@ fn bench_realistic_workload(c: &mut Criterion) {
                             })
                         })
                         .collect();
-                    
-                    let total: u64 = handles.into_iter()
-                        .map(|h| h.join().unwrap())
-                        .sum();
-                    
+
+                    let total: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
+
                     black_box(total)
                 })
             },
         );
     }
-    
+
     group.finish();
 }
 

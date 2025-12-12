@@ -136,13 +136,13 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub mod config {
     /// Maximum number of threads supported
     pub const MAX_THREADS: usize = 256;
-    
+
     /// Number of epochs before garbage collection is triggered
     pub const EPOCHS_PER_GC: usize = 128;
-    
+
     /// Cache line size for alignment
     pub const CACHE_LINE_SIZE: usize = 64;
-    
+
     /// Default NUMA node count limit
     #[cfg(feature = "numa")]
     pub const MAX_NUMA_NODES: usize = 64;
@@ -156,10 +156,10 @@ mod tests {
     fn test_basic_allocation() {
         let collector = Collector::new();
         let guard = collector.pin();
-        
+
         let owned = Owned::new(42i32);
         let shared = owned.into_shared(&guard);
-        
+
         unsafe {
             assert_eq!(*shared.deref(), 42);
         }
@@ -168,17 +168,17 @@ mod tests {
     #[test]
     fn test_multiple_guards() {
         let collector = Collector::new();
-        
+
         let guard1 = collector.pin();
         let guard2 = collector.pin();
-        
+
         let owned = Owned::new("hello");
         let shared = owned.into_shared(&guard1);
-        
+
         unsafe {
             assert_eq!(*shared.deref(), "hello");
         }
-        
+
         drop(guard2);
         drop(guard1);
     }

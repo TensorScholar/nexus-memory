@@ -55,10 +55,10 @@ use super::{Collector, Participant, INACTIVE};
 pub struct Guard<'a> {
     /// Reference to the collector
     collector: &'a Collector,
-    
+
     /// Reference to this thread's participant
     participant: &'a Participant,
-    
+
     /// Marker to prevent Send/Sync
     _marker: PhantomData<*mut ()>,
 }
@@ -128,7 +128,7 @@ impl<'a> Guard<'a> {
         // The guard's existence ensures this thread is pinned to the current epoch,
         // guaranteeing the object will not be reclaimed until at least two epoch
         // advancements occur (GracePeriod = 2 in the TLA+ spec).
-        // 
+        //
         // Formal guarantee: ∀ obj ∈ retired : retired[obj] + GracePeriod < epoch
         // before reclamation, as proven by the 'Reclaim' action precondition.
         //
@@ -151,7 +151,7 @@ impl<'a> Guard<'a> {
         // This corresponds to the TLA+ invariant:
         // ∀ t ∈ active, obj ∈ references[t] : obj ∈ allocated \ DOMAIN retired
         let bag = unsafe { &mut *get_mut_ptr(&self.participant.local_garbage) };
-        
+
         if !bag.is_empty() {
             // SAFETY: Verified by TLA+ action 'Reclaim' preconditions.
             // Objects in the bag were retired in a previous epoch and have passed
@@ -177,7 +177,7 @@ impl Drop for Guard<'_> {
         // 1. The pin_count is thread-local (each thread only modifies its own)
         // 2. The subsequent SeqCst store to epoch provides the necessary synchronization
         let prev = self.participant.pin_count.fetch_sub(1, Ordering::Relaxed);
-        
+
         // If this was the last pin, mark as inactive
         // SAFETY: Verified by TLA+ invariant 'EpochMonotonicity'.
         // Setting epoch to INACTIVE signals to the collector that this participant
@@ -345,7 +345,7 @@ mod tests {
     fn test_guard_creation() {
         let collector = Collector::new();
         let guard = collector.pin();
-        
+
         assert!(guard.epoch() < INACTIVE);
     }
 
@@ -353,11 +353,11 @@ mod tests {
     fn test_guard_refresh() {
         let collector = Collector::new();
         let guard = collector.pin();
-        
+
         let epoch1 = guard.epoch();
         guard.refresh();
         let epoch2 = guard.epoch();
-        
+
         // Epoch should be same or higher after refresh
         assert!(epoch2 >= epoch1);
     }
@@ -366,7 +366,7 @@ mod tests {
     fn test_unprotected() {
         // SAFETY: Test environment, no concurrency
         let unprotected = unsafe { Unprotected::new() };
-        
+
         // SAFETY: Same as above
         let guard = unsafe { unprotected.as_guard() };
         assert_eq!(guard.epoch(), 0);
@@ -376,13 +376,13 @@ mod tests {
     fn test_guarded_trait() {
         let collector = Collector::new();
         let guard = collector.pin();
-        
+
         assert!(guard.is_protected());
-        
+
         // SAFETY: Test environment
         let unprotected = unsafe { Unprotected::new() };
         let unprotected_guard = unsafe { unprotected.as_guard() };
-        
+
         assert!(!unprotected_guard.is_protected());
     }
 
@@ -390,7 +390,7 @@ mod tests {
     fn test_guard_flush() {
         let collector = Collector::new();
         let guard = collector.pin();
-        
+
         // Flush should not panic even with no garbage
         guard.flush();
     }

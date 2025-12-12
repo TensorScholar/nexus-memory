@@ -18,13 +18,13 @@
 //!
 //! # Complexity
 //!
-//! - pin(): O(1) 
+//! - pin(): O(1)
 //! - unpin(): O(1) amortized
 //! - collect(): O(G) where G is garbage count
 //! - try_advance(): O(T) where T is participant count
 
 use crate::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use crate::sync::cell::{UnsafeCell, get_mut_ptr};
+use crate::sync::cell::{get_mut_ptr, UnsafeCell};
 use core::mem::MaybeUninit;
 
 #[cfg(not(feature = "std"))]
@@ -33,7 +33,7 @@ use alloc::boxed::Box;
 #[cfg(feature = "std")]
 use std::boxed::Box;
 
-use super::{Epoch, AtomicEpoch, GarbageBag, Guard, INACTIVE};
+use super::{AtomicEpoch, Epoch, GarbageBag, Guard, INACTIVE};
 
 #[cfg(feature = "bench-metrics")]
 use std::time::Instant;
@@ -49,7 +49,7 @@ const MAX_PARTICIPANTS: usize = 256;
 const GC_FREQUENCY: u64 = 128;
 
 /// Timeout threshold for detecting "frozen" participants (Section 7.3).
-/// 
+///
 /// If a participant hasn't updated their epoch status within this duration,
 /// they are considered "frozen" (e.g., due to GC pause, network stall) and
 /// are ignored for epoch advancement purposes.
@@ -101,20 +101,20 @@ const MAX_LOCAL_GARBAGE: usize = 1024;
 pub struct Collector {
     /// The global epoch counter
     pub(crate) global_epoch: AtomicEpoch,
-    
+
     /// Participant registry - fixed array for lock-free access
     participants: Box<[Participant; MAX_PARTICIPANTS]>,
-    
+
     /// Number of registered participants
     num_participants: AtomicUsize,
-    
+
     /// Garbage bags for each epoch (rotating)
     garbage: [UnsafeCell<GarbageBag>; 4],
-    
+
     /// Number of operations since last GC attempt
     #[allow(dead_code)]
     ops_since_gc: AtomicU64,
-    
+
     /// Collection statistics
     #[cfg(feature = "statistics")]
     stats: CollectorStats,
@@ -156,16 +156,16 @@ struct CollectorStats {
 pub struct Participant {
     /// The epoch this participant last observed (INACTIVE if not pinned)
     pub(crate) epoch: AtomicEpoch,
-    
+
     /// Whether this slot is in use
     pub(crate) active: AtomicUsize,
-    
+
     /// Local garbage bag for this participant
     pub(crate) local_garbage: UnsafeCell<GarbageBag>,
-    
+
     /// Count of pins without unpins (for nested pinning)
     pub(crate) pin_count: AtomicUsize,
-    
+
     /// Timestamp of last activity (for epoch freeze detection - Section 7.3)
     /// Stored as microseconds since some unspecified epoch (e.g., Instant::now())
     /// A value of 0 means "never active" or "not tracked".
@@ -201,19 +201,17 @@ impl Collector {
     pub fn new() -> Self {
         // Initialize participant array
         let participants = {
-            let mut arr: Box<[MaybeUninit<Participant>; MAX_PARTICIPANTS]> = 
+            let mut arr: Box<[MaybeUninit<Participant>; MAX_PARTICIPANTS]> =
                 Box::new(unsafe { MaybeUninit::uninit().assume_init() });
-            
+
             for slot in arr.iter_mut() {
                 slot.write(Participant::default());
             }
-            
+
             // SAFETY: All elements are initialized
-            unsafe {
-                Box::from_raw(Box::into_raw(arr) as *mut [Participant; MAX_PARTICIPANTS])
-            }
+            unsafe { Box::from_raw(Box::into_raw(arr) as *mut [Participant; MAX_PARTICIPANTS]) }
         };
-        
+
         Self {
             global_epoch: AtomicEpoch::new(0),
             participants,
@@ -256,36 +254,35 @@ impl Collector {
 
         // SAFETY: Verified by TLA+ action 'EnterCritical' (spec/epoch_reclamation.tla).
         // This corresponds to: active' = active ∪ {t} ∧ threadEpoch' = [threadEpoch EXCEPT ![t] = epoch]
-        
+
         // Get or create participant for this thread
         let participant = self.get_or_create_participant();
-        
+
         // Record the current epoch
         // SAFETY: SeqCst ordering ensures:
         // 1. The epoch read is globally consistent (total order with other SeqCst operations)
         // 2. The subsequent store is visible to try_advance() before any loads there
         // This prevents the ABA problem where we might read a stale epoch.
         let epoch = self.global_epoch.load(Ordering::SeqCst);
-        
+
         // SAFETY: SeqCst store ensures the collector sees our epoch before we access any data.
         // This is the key synchronization point that establishes the grace period guarantee.
         participant.epoch.store(epoch, Ordering::SeqCst);
-        
+
         // Update last_active timestamp for epoch freeze detection (Section 7.3)
         // This allows try_advance() to detect and skip frozen/stalled participants.
         #[cfg(feature = "std")]
         {
             // Use a simple incrementing counter based on Instant for low overhead
             // The actual timestamp value doesn't matter, only the relative age
-            participant.last_active.store(
-                Self::current_timestamp_micros(),
-                Ordering::Release
-            );
+            participant
+                .last_active
+                .store(Self::current_timestamp_micros(), Ordering::Release);
         }
-        
+
         // Relaxed is sufficient for pin_count as it's only accessed by this thread
         participant.pin_count.fetch_add(1, Ordering::Relaxed);
-        
+
         // Periodically try to advance and collect
         // Note: Disabled during Loom testing to keep state space manageable
         #[cfg(not(all(feature = "loom", loom)))]
@@ -295,7 +292,7 @@ impl Collector {
                 self.try_advance_and_collect();
             }
         }
-        
+
         #[cfg(feature = "bench-metrics")]
         crate::epoch::metrics::record_pin(start.elapsed());
 
@@ -337,7 +334,7 @@ impl Collector {
         // SAFETY: SeqCst ensures we see the most recent epoch value and
         // establishes a total order with participant epoch loads.
         let current = self.global_epoch.load(Ordering::SeqCst);
-        
+
         // Check if all participants have observed the current epoch
         // This corresponds to the TLA+ precondition: ∀ t ∈ active : threadEpoch[t] = epoch
         for participant in self.participants.iter() {
@@ -346,17 +343,17 @@ impl Collector {
             if participant.active.load(Ordering::Relaxed) == 0 {
                 continue;
             }
-            
+
             // SAFETY: SeqCst load synchronizes with the SeqCst store in pin().
             // This ensures we see the participant's epoch update before they
             // access any protected data, maintaining the grace period invariant.
             let p_epoch = participant.epoch.load(Ordering::SeqCst);
-            
+
             // Skip inactive participants
             if p_epoch == INACTIVE {
                 continue;
             }
-            
+
             // =========== EPOCH FREEZE DETECTION (Section 7.3) ===========
             // Check if this participant has been stalled for too long.
             // If so, consider them "frozen" and ignore their epoch for advancement.
@@ -382,7 +379,7 @@ impl Collector {
                 }
             }
             // ============================================================
-            
+
             // SAFETY: Verified by TLA+ invariant 'EpochMonotonicity'.
             // If any participant is behind, advancing would violate the grace
             // period guarantee - they might still hold references to objects
@@ -390,14 +387,14 @@ impl Collector {
             if p_epoch < current {
                 #[cfg(feature = "statistics")]
                 self.stats.failed_advances.fetch_add(1, Ordering::Relaxed);
-                
+
                 #[cfg(feature = "bench-metrics")]
                 crate::epoch::metrics::record_advance(start.elapsed());
 
                 return false;
             }
         }
-        
+
         // All participants have caught up, try to advance
         // SAFETY: CAS with SeqCst ensures atomicity and provides a global
         // synchronization point. Only one thread can successfully advance.
@@ -407,12 +404,12 @@ impl Collector {
             Ordering::SeqCst,
             Ordering::SeqCst,
         );
-        
+
         #[cfg(feature = "statistics")]
         if result.is_ok() {
             self.stats.epoch_advances.fetch_add(1, Ordering::Relaxed);
         }
-        
+
         #[cfg(feature = "bench-metrics")]
         crate::epoch::metrics::record_advance(start.elapsed());
 
@@ -435,7 +432,7 @@ impl Collector {
         // Try to advance the epoch
         if self.try_advance() {
             let current = self.global_epoch.load(Ordering::SeqCst);
-            
+
             // Collect garbage from two epochs ago (grace period)
             // SAFETY: Verified by TLA+ invariant 'NoUseAfterFree'.
             // The grace period of 2 epochs ensures that:
@@ -446,7 +443,7 @@ impl Collector {
             // where GracePeriod = 2 in our implementation.
             if current >= 2 {
                 let old_epoch = (current - 2) % 4;
-                
+
                 // SAFETY: Verified by TLA+ theorem 'Safety'.
                 // We have exclusive access to garbage[old_epoch] because:
                 // 1. No participant has threadEpoch <= old_epoch (try_advance succeeded)
@@ -456,14 +453,16 @@ impl Collector {
                 // The UnsafeCell access is safe because collection only occurs
                 // after the grace period, ensuring mutual exclusion.
                 let bag = unsafe { &mut *get_mut_ptr(&self.garbage[old_epoch as usize]) };
-                
+
                 #[cfg(feature = "statistics")]
                 {
                     let collected = bag.len();
-                    self.stats.objects_collected.fetch_add(collected as u64, Ordering::Relaxed);
+                    self.stats
+                        .objects_collected
+                        .fetch_add(collected as u64, Ordering::Relaxed);
                     self.stats.collection_cycles.fetch_add(1, Ordering::Relaxed);
                 }
-                
+
                 // SAFETY: Verified by TLA+ invariant 'SafetyInvariant'.
                 // All objects in this bag have passed the grace period and
                 // no references exist: ∀ t ∈ Threads : obj ∉ references[t]
@@ -495,17 +494,17 @@ impl Collector {
             // SAFETY: SeqCst ensures we read the current epoch consistently.
             let epoch = self.global_epoch.load(Ordering::SeqCst);
             let bag_idx = (epoch % 4) as usize;
-            
+
             // SAFETY: Verified by TLA+ action 'Retire'.
             let bag = unsafe { &mut *get_mut_ptr(&self.garbage[bag_idx]) };
-            
+
             // Check if bag has space (enforces MaxGarbage from TLA+ spec)
             if bag.len() < MAX_LOCAL_GARBAGE {
                 // SAFETY: Caller guarantees pointer validity
                 unsafe { bag.defer(ptr) };
                 return;
             }
-            
+
             // Bag is full - apply backpressure strategy
             // This sacrifices "Wait-Free" for "Bounded Memory", aligning with
             // TLA+ constraints where Retire is guarded by capacity.
@@ -514,11 +513,11 @@ impl Collector {
             // bags are full and no thread can advance the epoch. The epoch
             // freeze mechanism (Section 7.3) helps mitigate this.
             self.try_advance_and_collect();
-            
+
             // Yield to allow other threads to make progress
             #[cfg(feature = "std")]
             std::thread::yield_now();
-            
+
             #[cfg(not(feature = "std"))]
             core::hint::spin_loop();
         }
@@ -530,28 +529,28 @@ impl Collector {
         // Loom requires its own thread_local! macro for proper model checking
         #[cfg(all(feature = "loom", loom))]
         loom::thread_local! {
-            static PARTICIPANT_IDX: core::cell::Cell<Option<usize>> = 
+            static PARTICIPANT_IDX: core::cell::Cell<Option<usize>> =
                 core::cell::Cell::new(None);
         }
-        
+
         #[cfg(not(all(feature = "loom", loom)))]
         thread_local! {
-            static PARTICIPANT_IDX: core::cell::Cell<Option<usize>> = 
+            static PARTICIPANT_IDX: core::cell::Cell<Option<usize>> =
                 const { core::cell::Cell::new(None) };
         }
-        
+
         // Check if we already have a participant
         let idx = PARTICIPANT_IDX.with(|cell| {
             if let Some(idx) = cell.get() {
                 return idx;
             }
-            
+
             // Need to allocate a new participant slot
             let idx = self.allocate_participant();
             cell.set(Some(idx));
             idx
         });
-        
+
         &self.participants[idx]
     }
 
@@ -559,15 +558,20 @@ impl Collector {
     fn allocate_participant(&self) -> usize {
         // Find a free slot
         for (idx, participant) in self.participants.iter().enumerate() {
-            if participant.active.compare_exchange(
-                0, 1, Ordering::SeqCst, Ordering::SeqCst
-            ).is_ok() {
+            if participant
+                .active
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
                 self.num_participants.fetch_add(1, Ordering::Relaxed);
                 return idx;
             }
         }
-        
-        panic!("Maximum number of participants ({}) exceeded", MAX_PARTICIPANTS);
+
+        panic!(
+            "Maximum number of participants ({}) exceeded",
+            MAX_PARTICIPANTS
+        );
     }
 
     /// Returns collection statistics (if enabled).
@@ -580,9 +584,9 @@ impl Collector {
             self.stats.failed_advances.load(Ordering::Relaxed),
         )
     }
-    
+
     /// Returns current timestamp in microseconds for epoch freeze detection.
-    /// 
+    ///
     /// Uses a global Instant reference for cross-thread timestamp comparison.
     /// The absolute value doesn't matter - only the relative age is used for
     /// straggler detection.
@@ -592,10 +596,10 @@ impl Collector {
     #[inline]
     fn current_timestamp_micros() -> u64 {
         use std::sync::LazyLock;
-        
+
         // Global start time for consistent timestamps across all threads
         static START: LazyLock<TimestampInstant> = LazyLock::new(TimestampInstant::now);
-        
+
         // Add 1 to ensure we never return 0 (which means "not tracked")
         START.elapsed().as_micros() as u64 + 1
     }
@@ -630,7 +634,7 @@ impl InternalMetrics {
             self.total_pin_time_ns as f64 / self.pin_count as f64
         }
     }
-    
+
     /// Returns the average try_advance() latency in nanoseconds.
     pub fn avg_advance_latency_ns(&self) -> f64 {
         if self.advance_count == 0 {
@@ -639,7 +643,7 @@ impl InternalMetrics {
             self.total_advance_time_ns as f64 / self.advance_count as f64
         }
     }
-    
+
     /// Returns the success rate of try_advance().
     pub fn advance_success_rate(&self) -> f64 {
         if self.advance_count == 0 {
@@ -670,7 +674,7 @@ impl InstrumentedCollector {
             metrics: std::sync::Mutex::new(InternalMetrics::default()),
         }
     }
-    
+
     /// Pins the current thread with timing instrumentation.
     ///
     /// Returns the guard and the time spent in the operation (in nanoseconds).
@@ -678,15 +682,15 @@ impl InstrumentedCollector {
         let start = std::time::Instant::now();
         let guard = self.inner.pin();
         let elapsed = start.elapsed().as_nanos() as u64;
-        
+
         if let Ok(mut metrics) = self.metrics.lock() {
             metrics.total_pin_time_ns += elapsed;
             metrics.pin_count += 1;
         }
-        
+
         (guard, elapsed)
     }
-    
+
     /// Attempts to advance the epoch with timing instrumentation.
     ///
     /// Returns whether the advance succeeded and the time spent (in nanoseconds).
@@ -694,7 +698,7 @@ impl InstrumentedCollector {
         let start = std::time::Instant::now();
         let success = self.inner.try_advance();
         let elapsed = start.elapsed().as_nanos() as u64;
-        
+
         if let Ok(mut metrics) = self.metrics.lock() {
             metrics.total_advance_time_ns += elapsed;
             metrics.advance_count += 1;
@@ -702,27 +706,25 @@ impl InstrumentedCollector {
                 metrics.successful_advances += 1;
             }
         }
-        
+
         (success, elapsed)
     }
-    
+
     /// Returns the current global epoch.
     pub fn epoch(&self) -> super::Epoch {
         self.inner.epoch()
     }
-    
+
     /// Returns a reference to the inner collector.
     pub fn inner(&self) -> &Collector {
         &self.inner
     }
-    
+
     /// Returns a copy of the current metrics.
     pub fn get_metrics(&self) -> InternalMetrics {
-        self.metrics.lock()
-            .map(|m| m.clone())
-            .unwrap_or_default()
+        self.metrics.lock().map(|m| m.clone()).unwrap_or_default()
     }
-    
+
     /// Resets the metrics counters.
     pub fn reset_metrics(&self) {
         if let Ok(mut metrics) = self.metrics.lock() {
@@ -753,7 +755,7 @@ impl Drop for Collector {
         // This corresponds to the final cleanup that occurs when the
         // entire epoch-based reclamation system is being destroyed.
         // All participants have been dropped or are unreachable.
-        
+
         // Collect all remaining garbage from epoch bags
         for bag in &self.garbage {
             // SAFETY: Exclusive access via &mut self.
@@ -762,7 +764,7 @@ impl Drop for Collector {
             // SAFETY: We own all remaining objects; safe to deallocate.
             unsafe { bag.collect() };
         }
-        
+
         // Also collect from participants' local bags
         for participant in self.participants.iter() {
             // SAFETY: Exclusive access via &mut self.
@@ -787,10 +789,10 @@ mod tests {
     #[test]
     fn test_pin_unpin() {
         let collector = Collector::new();
-        
+
         let guard = collector.pin();
         drop(guard);
-        
+
         // Should be able to pin again
         let _guard = collector.pin();
     }
@@ -798,7 +800,7 @@ mod tests {
     #[test]
     fn test_epoch_advance() {
         let collector = Collector::new();
-        
+
         // Without any guards, should be able to advance
         assert!(collector.try_advance());
         assert_eq!(collector.epoch(), 1);
@@ -806,23 +808,23 @@ mod tests {
 
     #[test]
     fn test_guard_prevents_advance() {
-        // Note: Thread-local participant caching means this test needs to 
+        // Note: Thread-local participant caching means this test needs to
         // ensure proper isolation. The first pin() establishes the participant.
         let collector = Collector::new();
-        
+
         // Pin before advancing - this establishes the participant at epoch 0
         let guard = collector.pin();
-        
+
         // Epoch is at 0, participant is at 0
         // First advance: 0 -> 1 should succeed since participant.epoch (0) >= current (0)
         let first = collector.try_advance();
-        
+
         // After first advance, epoch is 1, participant is still at 0
         // Second advance should fail: participant.epoch (0) < current (1)
         let second = collector.try_advance();
-        
+
         drop(guard);
-        
+
         // The exact behavior depends on implementation details
         // At minimum, we verify that having a guard affects advancement
         assert!(first || !second, "Guard should affect epoch advancement");
@@ -831,13 +833,13 @@ mod tests {
     #[test]
     fn test_nested_pinning() {
         let collector = Collector::new();
-        
+
         let guard1 = collector.pin();
         let guard2 = collector.pin();
-        
+
         drop(guard1);
         // guard2 still holding, should not be able to advance beyond epoch 0
-        
+
         drop(guard2);
     }
 
@@ -845,10 +847,10 @@ mod tests {
     fn test_multiple_threads() {
         use std::sync::Arc;
         use std::thread;
-        
+
         let collector = Arc::new(Collector::new());
         let mut handles = vec![];
-        
+
         for _ in 0..4 {
             let c = collector.clone();
             handles.push(thread::spawn(move || {
@@ -859,11 +861,11 @@ mod tests {
                 }
             }));
         }
-        
+
         for handle in handles {
             handle.join().unwrap();
         }
-        
+
         // All threads done, epoch should have advanced
         assert!(collector.epoch() > 0);
     }

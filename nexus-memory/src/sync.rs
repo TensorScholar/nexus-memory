@@ -26,20 +26,12 @@ pub mod atomic {
     //!
     //! These re-exports provide Loom's atomics which track all memory orderings
     //! and enable exhaustive interleaving exploration.
-    
+
     pub use loom::sync::atomic::{
-        AtomicBool,
-        AtomicU8,
-        AtomicU16,
-        AtomicU32,
-        AtomicU64,
-        AtomicUsize,
-        AtomicIsize,
-        AtomicPtr,
-        Ordering,
-        fence,
+        fence, AtomicBool, AtomicIsize, AtomicPtr, AtomicU16, AtomicU32, AtomicU64, AtomicU8,
+        AtomicUsize, Ordering,
     };
-    
+
     // Loom doesn't model compiler_fence, so we use a regular fence for model checking
     // which is more conservative but correct for verification purposes.
     pub use loom::sync::atomic::fence as compiler_fence;
@@ -50,19 +42,10 @@ pub mod atomic {
     //! Standard library atomic types.
     //!
     //! In non-Loom mode, these are zero-cost re-exports from `core::sync::atomic`.
-    
+
     pub use core::sync::atomic::{
-        AtomicBool,
-        AtomicU8,
-        AtomicU16,
-        AtomicU32,
-        AtomicU64,
-        AtomicUsize,
-        AtomicIsize,
-        AtomicPtr,
-        Ordering,
-        fence,
-        compiler_fence,
+        compiler_fence, fence, AtomicBool, AtomicIsize, AtomicPtr, AtomicU16, AtomicU32, AtomicU64,
+        AtomicU8, AtomicUsize, Ordering,
     };
 }
 
@@ -73,20 +56,20 @@ pub mod cell {
     //! Loom's UnsafeCell has a different API than std's - it returns
     //! ConstPtr/MutPtr wrappers instead of raw pointers. We provide
     //! helper functions to abstract this difference.
-    
+
     pub use loom::cell::UnsafeCell;
-    
+
     /// Get a mutable raw pointer from an UnsafeCell.
-    /// 
+    ///
     /// In Loom mode, this uses `with_mut` to get a tracked raw pointer.
-    /// 
+    ///
     /// # Safety
     /// Caller must ensure exclusive access to the cell's contents.
     #[inline]
     pub unsafe fn get_mut_ptr<T>(cell: &UnsafeCell<T>) -> *mut T {
         cell.get_mut().deref()
     }
-    
+
     /// Access the contents of an UnsafeCell mutably through a closure.
     ///
     /// This is the preferred way to access UnsafeCell contents in Loom.
@@ -102,9 +85,9 @@ pub mod cell {
 #[cfg(not(all(feature = "loom", loom)))]
 pub mod cell {
     //! Standard library cell types.
-    
+
     pub use core::cell::UnsafeCell;
-    
+
     /// Get a mutable raw pointer from an UnsafeCell.
     ///
     /// In standard mode, this is just `cell.get()`.
@@ -115,7 +98,7 @@ pub mod cell {
     pub unsafe fn get_mut_ptr<T>(cell: &UnsafeCell<T>) -> *mut T {
         cell.get()
     }
-    
+
     /// Access the contents of an UnsafeCell mutably through a closure.
     ///
     /// # Safety
@@ -129,9 +112,9 @@ pub mod cell {
 #[cfg(all(feature = "loom", loom))]
 pub mod thread {
     //! Loom thread primitives for model checking.
-    
-    pub use loom::thread::{spawn, yield_now, JoinHandle, Builder};
-    
+
+    pub use loom::thread::{spawn, yield_now, Builder, JoinHandle};
+
     /// Runs a Loom model checking session.
     ///
     /// This function explores all possible thread interleavings to verify
@@ -147,10 +130,10 @@ pub mod thread {
 #[cfg(not(all(feature = "loom", loom)))]
 pub mod thread {
     //! Standard library thread primitives.
-    
+
     #[cfg(feature = "std")]
-    pub use std::thread::{spawn, yield_now, JoinHandle, Builder};
-    
+    pub use std::thread::{spawn, yield_now, Builder, JoinHandle};
+
     /// No-op in non-Loom mode.
     ///
     /// When not using Loom, this simply runs the function once.
@@ -166,20 +149,20 @@ pub mod thread {
 #[cfg(all(feature = "loom", loom))]
 pub mod sync {
     //! Loom-aware synchronization primitives.
-    
-    pub use loom::sync::{Arc, Mutex, RwLock, Condvar};
+
+    pub use loom::sync::{Arc, Condvar, Mutex, RwLock};
 }
 
 #[cfg(not(all(feature = "loom", loom)))]
 pub mod sync {
     //! Standard library synchronization primitives.
-    
+
     #[cfg(feature = "std")]
-    pub use std::sync::{Arc, Mutex, RwLock, Condvar};
-    
+    pub use std::sync::{Arc, Condvar, Mutex, RwLock};
+
     #[cfg(not(feature = "std"))]
     extern crate alloc;
-    
+
     #[cfg(not(feature = "std"))]
     pub use alloc::sync::Arc;
 }
@@ -196,7 +179,7 @@ macro_rules! loom_thread_local {
             $(#[$attr])*
             $vis static $name: $ty = $init;
         }
-        
+
         #[cfg(not(all(feature = "loom", loom)))]
         std::thread_local! {
             $(#[$attr])*
@@ -208,7 +191,7 @@ macro_rules! loom_thread_local {
 #[cfg(test)]
 mod tests {
     use super::atomic::{AtomicUsize, Ordering};
-    
+
     #[test]
     fn test_atomic_basic() {
         let counter = AtomicUsize::new(0);
@@ -216,7 +199,7 @@ mod tests {
         counter.store(42, Ordering::SeqCst);
         assert_eq!(counter.load(Ordering::SeqCst), 42);
     }
-    
+
     #[test]
     fn test_atomic_cas() {
         let counter = AtomicUsize::new(10);

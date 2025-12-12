@@ -3,14 +3,14 @@
 //! Provides memory allocation with explicit NUMA node placement, enabling
 //! optimal data locality for cross-paradigm processing.
 
-use core::ptr::NonNull;
 use core::alloc::Layout;
+use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "std")]
 use std::alloc::{alloc, dealloc};
 
-use super::{NumaTopology, NodeId, NumaStats, NumaError, Result};
+use super::{NodeId, NumaError, NumaStats, NumaTopology, Result};
 
 /// NUMA-aware memory allocator.
 ///
@@ -31,10 +31,10 @@ pub struct NumaAllocator {
     /// Reference to topology
     #[cfg(feature = "std")]
     topology: &'static NumaTopology,
-    
+
     /// Allocation statistics
     stats: NumaStats,
-    
+
     /// Default allocation policy
     #[allow(dead_code)]
     default_policy: AllocationPolicy,
@@ -45,16 +45,16 @@ pub struct NumaAllocator {
 pub enum AllocationPolicy {
     /// Allocate on the local NUMA node
     Local,
-    
+
     /// Allocate on a specific node
     OnNode(NodeId),
-    
+
     /// Prefer a specific node but allow fallback
     PreferNode(NodeId),
-    
+
     /// Interleave across all nodes (good for shared data)
     Interleaved,
-    
+
     /// Let the OS decide (first-touch policy)
     FirstTouch,
 }
@@ -99,11 +99,10 @@ impl NumaAllocator {
     pub fn allocate<T>(&self, count: usize, policy: AllocationPolicy) -> Option<NonNull<T>> {
         let size = count.checked_mul(core::mem::size_of::<T>())?;
         let align = core::mem::align_of::<T>().max(64); // Cache-line aligned
-        
+
         let layout = Layout::from_size_align(size, align).ok()?;
-        
-        self.allocate_raw(layout, policy)
-            .map(|ptr| ptr.cast())
+
+        self.allocate_raw(layout, policy).map(|ptr| ptr.cast())
     }
 
     /// Allocates raw memory with the specified layout.
@@ -113,13 +112,13 @@ impl NumaAllocator {
         }
 
         let node = self.resolve_node(policy);
-        
+
         let ptr = self.allocate_on_node(layout, node);
-        
+
         if let Some(_p) = ptr {
             self.stats.record_allocation(node.0, layout.size() as u64);
         }
-        
+
         ptr
     }
 
@@ -131,7 +130,7 @@ impl NumaAllocator {
     pub unsafe fn deallocate<T>(&self, ptr: NonNull<T>, count: usize, node: NodeId) {
         let size = count * core::mem::size_of::<T>();
         let align = core::mem::align_of::<T>().max(64);
-        
+
         if let Ok(layout) = Layout::from_size_align(size, align) {
             self.deallocate_raw(ptr.cast(), layout, node);
         }
@@ -189,7 +188,7 @@ impl NumaAllocator {
                 // Simple round-robin based on allocation count
                 static COUNTER: AtomicU64 = AtomicU64::new(0);
                 let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-                
+
                 #[cfg(feature = "std")]
                 {
                     let num_nodes = self.topology.num_nodes();
@@ -210,7 +209,7 @@ impl NumaAllocator {
         {
             self.allocate_linux(layout, node)
         }
-        
+
         #[cfg(not(target_os = "linux"))]
         {
             self.allocate_fallback(layout)
@@ -226,7 +225,7 @@ impl NumaAllocator {
     #[cfg(target_os = "linux")]
     fn allocate_linux(&self, layout: Layout, node: NodeId) -> Option<NonNull<u8>> {
         use std::ptr;
-        
+
         // Use mmap for large allocations, standard allocator for small ones
         if layout.size() >= 4096 {
             // Allocate virtual memory with MAP_POPULATE to pre-fault pages
@@ -241,11 +240,11 @@ impl NumaAllocator {
                     0,
                 )
             };
-            
+
             if ptr == libc::MAP_FAILED {
                 return None;
             }
-            
+
             // Bind to the specified NUMA node using mbind
             // MPOL_BIND enforces strict placement on the specified node
             // MPOL_MF_MOVE_ALL will migrate existing pages if needed
@@ -254,30 +253,30 @@ impl NumaAllocator {
                 let mut nodemask: [libc::c_ulong; 16] = [0; 16]; // Support up to 1024 nodes
                 let word_idx = (node.0 as usize) / (std::mem::size_of::<libc::c_ulong>() * 8);
                 let bit_idx = (node.0 as usize) % (std::mem::size_of::<libc::c_ulong>() * 8);
-                
+
                 if word_idx < nodemask.len() {
                     nodemask[word_idx] = 1 << bit_idx;
                 }
-                
+
                 // Apply memory policy
                 // Note: mbind may fail silently if NUMA is not available
                 let _ = libc::syscall(
                     libc::SYS_mbind,
                     ptr,
                     layout.size(),
-                    1i32,  // MPOL_BIND = 1 (libc may not have this constant)
+                    1i32, // MPOL_BIND = 1 (libc may not have this constant)
                     nodemask.as_ptr(),
                     MAX_NUMA_NODES as libc::c_ulong + 1,
-                    (1 << 2) as libc::c_uint,  // MPOL_MF_MOVE_ALL = 1 << 2
+                    (1 << 2) as libc::c_uint, // MPOL_MF_MOVE_ALL = 1 << 2
                 );
             }
-            
+
             // Pre-fault pages to ensure physical allocation on the bound node
             // This is critical for FirstTouch policy to work correctly
             unsafe {
                 let page_size = libc::sysconf(libc::_SC_PAGESIZE) as usize;
                 let num_pages = (layout.size() + page_size - 1) / page_size;
-                
+
                 for i in 0..num_pages {
                     let offset = i * page_size;
                     let page_ptr = (ptr as *mut u8).add(offset);
@@ -285,7 +284,7 @@ impl NumaAllocator {
                     page_ptr.write_volatile(0);
                 }
             }
-            
+
             NonNull::new(ptr as *mut u8)
         } else {
             // Small allocation - use standard allocator
@@ -300,7 +299,7 @@ impl NumaAllocator {
             let ptr = unsafe { alloc(layout) };
             NonNull::new(ptr)
         }
-        
+
         #[cfg(not(feature = "std"))]
         {
             None
@@ -322,7 +321,7 @@ impl NumaAllocator {
                 }
             }
         }
-        
+
         #[cfg(not(target_os = "linux"))]
         {
             #[cfg(feature = "std")]
@@ -355,11 +354,11 @@ impl<T> NumaBuffer<T> {
     pub fn new(count: usize, policy: AllocationPolicy) -> Result<Self> {
         let allocator = NumaAllocator::new();
         let node = allocator.resolve_node(policy);
-        
+
         let ptr = allocator
             .allocate::<T>(count, policy)
             .ok_or(NumaError::AllocationFailed)?;
-        
+
         Ok(Self { ptr, count, node })
     }
 
@@ -432,10 +431,10 @@ mod tests {
     #[test]
     fn test_allocation() {
         let allocator = NumaAllocator::new();
-        
+
         let ptr = allocator.allocate::<u64>(100, AllocationPolicy::Local);
         assert!(ptr.is_some());
-        
+
         if let Some(p) = ptr {
             unsafe {
                 allocator.deallocate(p, 100, NodeId(0));
@@ -447,7 +446,7 @@ mod tests {
     fn test_numa_buffer() {
         let buffer = NumaBuffer::<u64>::new(100, AllocationPolicy::Local);
         assert!(buffer.is_ok());
-        
+
         let buffer = buffer.unwrap();
         assert_eq!(buffer.count(), 100);
     }
@@ -455,7 +454,7 @@ mod tests {
     #[test]
     fn test_zero_size_allocation() {
         let allocator = NumaAllocator::new();
-        
+
         // Zero-size allocation should work
         let ptr = allocator.allocate::<u64>(0, AllocationPolicy::Local);
         assert!(ptr.is_some());
@@ -464,7 +463,7 @@ mod tests {
     #[test]
     fn test_policies() {
         let allocator = NumaAllocator::new();
-        
+
         // Test different policies
         let _ = allocator.allocate::<u64>(10, AllocationPolicy::Local);
         let _ = allocator.allocate::<u64>(10, AllocationPolicy::OnNode(NodeId(0)));

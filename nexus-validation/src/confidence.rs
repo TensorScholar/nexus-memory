@@ -50,13 +50,18 @@ impl BootstrapEstimator {
         let lower_idx = ((alpha / 2.0) * self.n_samples as f64) as usize;
         let upper_idx = ((1.0 - alpha / 2.0) * self.n_samples as f64) as usize;
 
-        let lower = bootstrap_means.get(lower_idx).copied().unwrap_or(stats.mean);
+        let lower = bootstrap_means
+            .get(lower_idx)
+            .copied()
+            .unwrap_or(stats.mean);
         let upper = bootstrap_means
             .get(upper_idx.min(bootstrap_means.len() - 1))
             .copied()
             .unwrap_or(stats.mean);
 
-        Some(ConfidenceInterval::new(lower, upper, stats.mean, confidence))
+        Some(ConfidenceInterval::new(
+            lower, upper, stats.mean, confidence,
+        ))
     }
 
     /// Compute bootstrap confidence interval for median
@@ -93,13 +98,21 @@ impl BootstrapEstimator {
         let lower_idx = ((alpha / 2.0) * self.n_samples as f64) as usize;
         let upper_idx = ((1.0 - alpha / 2.0) * self.n_samples as f64) as usize;
 
-        let lower = bootstrap_medians.get(lower_idx).copied().unwrap_or(stats.median);
+        let lower = bootstrap_medians
+            .get(lower_idx)
+            .copied()
+            .unwrap_or(stats.median);
         let upper = bootstrap_medians
             .get(upper_idx.min(bootstrap_medians.len() - 1))
             .copied()
             .unwrap_or(stats.median);
 
-        Some(ConfidenceInterval::new(lower, upper, stats.median, confidence))
+        Some(ConfidenceInterval::new(
+            lower,
+            upper,
+            stats.median,
+            confidence,
+        ))
     }
 
     /// Compute bootstrap confidence interval for ratio of means
@@ -154,13 +167,21 @@ impl BootstrapEstimator {
         let lower_idx = ((alpha / 2.0) * bootstrap_ratios.len() as f64) as usize;
         let upper_idx = ((1.0 - alpha / 2.0) * bootstrap_ratios.len() as f64) as usize;
 
-        let lower = bootstrap_ratios.get(lower_idx).copied().unwrap_or(point_estimate);
+        let lower = bootstrap_ratios
+            .get(lower_idx)
+            .copied()
+            .unwrap_or(point_estimate);
         let upper = bootstrap_ratios
             .get(upper_idx.min(bootstrap_ratios.len().saturating_sub(1)))
             .copied()
             .unwrap_or(point_estimate);
 
-        Some(ConfidenceInterval::new(lower, upper, point_estimate, confidence))
+        Some(ConfidenceInterval::new(
+            lower,
+            upper,
+            point_estimate,
+            confidence,
+        ))
     }
 }
 
@@ -176,7 +197,7 @@ impl BcaBootstrap {
     }
 
     /// Compute BCa confidence interval for mean
-    /// 
+    ///
     /// BCa adjusts for bias and skewness in the bootstrap distribution
     pub fn mean_ci(&self, data: &[f64], confidence: f64) -> Option<ConfidenceInterval> {
         if data.len() < 3 {
@@ -220,7 +241,11 @@ impl BcaBootstrap {
         let jk_mean: f64 = jackknife_means.iter().sum::<f64>() / n as f64;
         let num: f64 = jackknife_means.iter().map(|&x| (jk_mean - x).powi(3)).sum();
         let den: f64 = jackknife_means.iter().map(|&x| (jk_mean - x).powi(2)).sum();
-        let acc = if den != 0.0 { num / (6.0 * den.powf(1.5)) } else { 0.0 };
+        let acc = if den != 0.0 {
+            num / (6.0 * den.powf(1.5))
+        } else {
+            0.0
+        };
 
         // Adjusted percentiles
         let alpha = 1.0 - confidence;
@@ -244,7 +269,9 @@ impl BcaBootstrap {
             .copied()
             .unwrap_or(stats.mean);
 
-        Some(ConfidenceInterval::new(lower, upper, stats.mean, confidence))
+        Some(ConfidenceInterval::new(
+            lower, upper, stats.mean, confidence,
+        ))
     }
 }
 
@@ -318,7 +345,7 @@ fn erf(x: f64) -> f64 {
     if x == 0.0 {
         return 0.0;
     }
-    
+
     // Horner's method for the approximation
     let a1 = 0.254829592;
     let a2 = -0.284496736;

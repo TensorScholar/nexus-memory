@@ -3,7 +3,6 @@
 //! Discovers and represents the NUMA topology of the system, including
 //! node count, CPU affinity, memory capacity, and inter-node distances.
 
-
 #[cfg(feature = "std")]
 use std::sync::OnceLock;
 
@@ -101,10 +100,10 @@ impl From<u32> for NodeId {
 pub struct NumaTopology {
     /// Number of NUMA nodes
     num_nodes: usize,
-    
+
     /// Node information
     nodes: Vec<NumaNode>,
-    
+
     /// Whether NUMA is actually available
     numa_available: bool,
 }
@@ -113,9 +112,7 @@ impl NumaTopology {
     /// Gets or initializes the global topology.
     #[cfg(feature = "std")]
     pub fn get() -> &'static Self {
-        TOPOLOGY.get_or_init(|| {
-            Self::discover().unwrap_or_else(|_| Self::fallback())
-        })
+        TOPOLOGY.get_or_init(|| Self::discover().unwrap_or_else(|_| Self::fallback()))
     }
 
     /// Discovers the system's NUMA topology.
@@ -124,18 +121,18 @@ impl NumaTopology {
         {
             Self::discover_linux()
         }
-        
+
         #[cfg(target_os = "macos")]
         {
             // macOS doesn't expose NUMA topology
             Ok(Self::fallback())
         }
-        
+
         #[cfg(target_os = "windows")]
         {
             Self::discover_windows()
         }
-        
+
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             Ok(Self::fallback())
@@ -147,20 +144,20 @@ impl NumaTopology {
         let num_cpus = std::thread::available_parallelism()
             .map(|p| p.get())
             .unwrap_or(1);
-        
+
         let mut cpus = CpuSet::new();
         for i in 0..num_cpus {
             cpus.insert(i as u32);
         }
-        
+
         // Estimate memory (use 16 GB as default)
         let memory = 16 * 1024 * 1024 * 1024u64;
-        
+
         let mut distances = [255u8; MAX_NUMA_NODES];
         distances[0] = 10; // Local distance
-        
+
         let node = NumaNode::new(0, cpus, memory, distances);
-        
+
         Self {
             num_nodes: 1,
             nodes: vec![node],
@@ -173,21 +170,21 @@ impl NumaTopology {
     fn discover_linux() -> Result<Self> {
         use std::fs;
         use std::path::Path;
-        
+
         let numa_path = Path::new("/sys/devices/system/node");
-        
+
         if !numa_path.exists() {
             return Ok(Self::fallback());
         }
-        
+
         // Find all node directories
         let mut node_ids: Vec<u32> = Vec::new();
-        
+
         if let Ok(entries) = fs::read_dir(numa_path) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let name_str = name.to_string_lossy();
-                
+
                 if name_str.starts_with("node") {
                     if let Ok(id) = name_str[4..].parse::<u32>() {
                         node_ids.push(id);
@@ -195,18 +192,18 @@ impl NumaTopology {
                 }
             }
         }
-        
+
         if node_ids.is_empty() {
             return Ok(Self::fallback());
         }
-        
+
         node_ids.sort();
-        
+
         let mut nodes = Vec::with_capacity(node_ids.len());
-        
+
         for &node_id in &node_ids {
             let node_path = numa_path.join(format!("node{}", node_id));
-            
+
             // Read CPU list
             let mut cpus = CpuSet::new();
             if let Ok(cpu_list) = fs::read_to_string(node_path.join("cpulist")) {
@@ -225,7 +222,7 @@ impl NumaTopology {
                     }
                 }
             }
-            
+
             // Read memory info
             let memory = fs::read_to_string(node_path.join("meminfo"))
                 .ok()
@@ -243,7 +240,7 @@ impl NumaTopology {
                     None
                 })
                 .unwrap_or(0);
-            
+
             // Read distances
             let mut distances = [255u8; MAX_NUMA_NODES];
             if let Ok(dist_str) = fs::read_to_string(node_path.join("distance")) {
@@ -255,10 +252,10 @@ impl NumaTopology {
                     }
                 }
             }
-            
+
             nodes.push(NumaNode::new(node_id, cpus, memory, distances));
         }
-        
+
         Ok(Self {
             num_nodes: nodes.len(),
             nodes,
@@ -309,7 +306,7 @@ impl NumaTopology {
                 }
             }
         }
-        
+
         // Default to node 0
         NodeId(0)
     }
@@ -328,22 +325,22 @@ impl NumaTopology {
         if thread_nodes.is_empty() || self.num_nodes == 1 {
             return NodeId(0);
         }
-        
+
         let mut best_node = NodeId(0);
         let mut best_total_distance = u64::MAX;
-        
+
         for node in &self.nodes {
             let total_distance: u64 = thread_nodes
                 .iter()
                 .map(|&tn| self.distance(NodeId(node.id()), tn) as u64)
                 .sum();
-            
+
             if total_distance < best_total_distance {
                 best_total_distance = total_distance;
                 best_node = NodeId(node.id());
             }
         }
-        
+
         best_node
     }
 }
@@ -355,20 +352,20 @@ mod tests {
     #[test]
     fn test_cpu_set() {
         let mut set = CpuSet::new();
-        
+
         assert!(set.is_empty());
-        
+
         set.insert(0);
         set.insert(5);
         set.insert(100);
-        
+
         assert!(set.contains(0));
         assert!(set.contains(5));
         assert!(set.contains(100));
         assert!(!set.contains(1));
-        
+
         assert_eq!(set.count(), 3);
-        
+
         set.remove(5);
         assert!(!set.contains(5));
         assert_eq!(set.count(), 2);
@@ -377,10 +374,10 @@ mod tests {
     #[test]
     fn test_fallback_topology() {
         let topology = NumaTopology::fallback();
-        
+
         assert_eq!(topology.num_nodes(), 1);
         assert!(!topology.is_numa_available());
-        
+
         let node = topology.node(0).unwrap();
         assert_eq!(node.id(), 0);
         assert!(node.cpus().count() > 0);
@@ -390,7 +387,7 @@ mod tests {
     fn test_node_id() {
         let id = NodeId::new(5);
         assert_eq!(id.as_u32(), 5);
-        
+
         let id2: NodeId = 10u32.into();
         assert_eq!(id2.as_u32(), 10);
     }
@@ -398,7 +395,7 @@ mod tests {
     #[test]
     fn test_distance() {
         let topology = NumaTopology::fallback();
-        
+
         // Self-distance should be 10 (local)
         assert_eq!(topology.distance(NodeId(0), NodeId(0)), 10);
     }

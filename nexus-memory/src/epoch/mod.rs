@@ -46,17 +46,17 @@ mod hierarchical;
 #[cfg(feature = "bench-metrics")]
 pub mod metrics;
 
-pub use collector::{Collector, Participant, InternalMetrics};
 #[cfg(feature = "std")]
 pub use collector::InstrumentedCollector;
+pub use collector::{Collector, InternalMetrics, Participant};
 pub use guard::{Guard, Unprotected};
 pub use hierarchical::HierarchicalEpoch;
 
 use crate::sync::atomic::AtomicU64;
 use core::marker::PhantomData;
-use core::ptr::NonNull;
 use core::mem;
 use core::ops::Deref;
+use core::ptr::NonNull;
 
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, vec::Vec};
@@ -381,7 +381,7 @@ impl Drop for GarbageBag {
                 self.len()
             );
         }
-        
+
         // Always clean up to avoid leaks
         unsafe { self.collect() };
     }
@@ -421,18 +421,18 @@ mod tests {
     #[test]
     fn test_garbage_bag() {
         let mut bag = GarbageBag::new();
-        
+
         let ptr = Box::into_raw(Box::new(42i32));
         unsafe {
             bag.defer(ptr);
         }
-        
+
         assert_eq!(bag.len(), 1);
-        
+
         unsafe {
             bag.collect();
         }
-        
+
         assert!(bag.is_empty());
     }
 }

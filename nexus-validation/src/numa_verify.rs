@@ -60,8 +60,12 @@ impl std::fmt::Display for NumaVerifyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             NumaVerifyError::NumaNotSupported => write!(f, "NUMA not supported on this system"),
-            NumaVerifyError::SyscallFailed(errno) => write!(f, "move_pages syscall failed with errno {}", errno),
-            NumaVerifyError::InsufficientPrivileges => write!(f, "insufficient privileges for NUMA operations"),
+            NumaVerifyError::SyscallFailed(errno) => {
+                write!(f, "move_pages syscall failed with errno {}", errno)
+            }
+            NumaVerifyError::InsufficientPrivileges => {
+                write!(f, "insufficient privileges for NUMA operations")
+            }
             NumaVerifyError::InvalidPointer => write!(f, "invalid pointer provided"),
             NumaVerifyError::InvalidNode(n) => write!(f, "NUMA node {} does not exist", n),
             NumaVerifyError::TopologyReadError => write!(f, "failed to read NUMA topology"),
@@ -104,31 +108,31 @@ impl NumaTopology {
 /// - `None` if the system doesn't support NUMA or topology couldn't be read
 pub fn detect_numa_topology() -> Option<NumaTopology> {
     let node_path = Path::new("/sys/devices/system/node");
-    
+
     if !node_path.exists() {
         return None;
     }
-    
+
     let entries = fs::read_dir(node_path).ok()?;
-    
+
     let mut nodes = Vec::new();
-    
+
     for entry in entries.filter_map(|e| e.ok()) {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        
+
         if name_str.starts_with("node") {
             if let Ok(node_id) = name_str[4..].parse::<u32>() {
                 nodes.push(node_id);
             }
         }
     }
-    
+
     nodes.sort();
-    
+
     let num_nodes = nodes.len();
     let is_numa = num_nodes > 1;
-    
+
     Some(NumaTopology {
         nodes,
         num_nodes,
@@ -156,33 +160,33 @@ pub fn detect_numa_topology() -> Option<NumaTopology> {
 #[cfg(target_os = "linux")]
 pub fn get_physical_node(ptr: *const u8) -> Result<i32> {
     use std::mem::MaybeUninit;
-    
+
     if ptr.is_null() {
         return Err(NumaVerifyError::InvalidPointer);
     }
-    
+
     // Page-align the pointer
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
     let page_ptr = ((ptr as usize) & !(page_size - 1)) as *mut libc::c_void;
-    
+
     let mut pages: [*mut libc::c_void; 1] = [page_ptr];
     let mut status: [i32; 1] = [-1];
-    
+
     // Call move_pages with nodes=NULL to query without moving
     // int move_pages(int pid, unsigned long count,
     //                void **pages, const int *nodes, int *status, int flags)
     let result = unsafe {
         libc::syscall(
             libc::SYS_move_pages,
-            0i32,                           // pid = 0 means current process
-            1usize,                         // count = 1 page
-            pages.as_mut_ptr(),             // pages array
-            std::ptr::null::<i32>(),             // nodes = NULL (query only)
-            status.as_mut_ptr(),            // status output
-            0i32,                           // flags = 0
+            0i32,                    // pid = 0 means current process
+            1usize,                  // count = 1 page
+            pages.as_mut_ptr(),      // pages array
+            std::ptr::null::<i32>(), // nodes = NULL (query only)
+            status.as_mut_ptr(),     // status output
+            0i32,                    // flags = 0
         )
     };
-    
+
     if result != 0 {
         let errno = unsafe { *libc::__errno_location() };
         return match errno {
@@ -191,10 +195,10 @@ pub fn get_physical_node(ptr: *const u8) -> Result<i32> {
             _ => Err(NumaVerifyError::SyscallFailed(errno)),
         };
     }
-    
+
     // Check status
     let node = status[0];
-    
+
     if node < 0 {
         // Negative values indicate errors
         return match -node {
@@ -203,7 +207,7 @@ pub fn get_physical_node(ptr: *const u8) -> Result<i32> {
             _ => Err(NumaVerifyError::SyscallFailed(-node)),
         };
     }
-    
+
     Ok(node)
 }
 
@@ -275,20 +279,24 @@ pub fn verify_buffer_placement(
 ) -> PlacementVerification {
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
     let num_pages = (size + page_size - 1) / page_size;
-    
+
     // Sample up to 100 pages evenly distributed
     let sample_count = num_pages.min(100);
-    let step = if sample_count > 0 { num_pages / sample_count } else { 1 };
-    
+    let step = if sample_count > 0 {
+        num_pages / sample_count
+    } else {
+        1
+    };
+
     let mut pages_checked = 0;
     let mut pages_correct = 0;
     let mut first_actual_node = None;
     let mut error = None;
-    
+
     for i in (0..num_pages).step_by(step.max(1)) {
         let offset = i * page_size;
         let page_ptr = unsafe { ptr.add(offset) };
-        
+
         match get_physical_node(page_ptr) {
             Ok(node) => {
                 pages_checked += 1;
@@ -306,9 +314,9 @@ pub fn verify_buffer_placement(
             }
         }
     }
-    
+
     let verified = pages_checked > 0 && pages_correct == pages_checked;
-    
+
     PlacementVerification {
         expected_node,
         actual_node: first_actual_node,
@@ -334,7 +342,7 @@ pub fn verify_buffer_placement(
 /// The caller must ensure `ptr` points to valid, writable memory of at least `size` bytes.
 pub unsafe fn prefault_memory(ptr: *mut u8, size: usize) {
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-    
+
     for offset in (0..size).step_by(page_size) {
         // Write to each page to trigger allocation
         let page_ptr = ptr.add(offset);
@@ -358,24 +366,22 @@ pub unsafe fn prefault_memory(ptr: *mut u8, size: usize) {
 #[cfg(target_os = "linux")]
 pub fn pin_thread_to_cpu(cpu: usize) -> Result<()> {
     use std::mem;
-    
+
     unsafe {
         let mut cpuset: libc::cpu_set_t = mem::zeroed();
         libc::CPU_ZERO(&mut cpuset);
         libc::CPU_SET(cpu, &mut cpuset);
-        
+
         let result = libc::sched_setaffinity(
             0, // current thread
             mem::size_of::<libc::cpu_set_t>(),
             &cpuset,
         );
-        
+
         if result == 0 {
             Ok(())
         } else {
-            Err(NumaVerifyError::SyscallFailed(
-                *libc::__errno_location()
-            ))
+            Err(NumaVerifyError::SyscallFailed(*libc::__errno_location()))
         }
     }
 }
@@ -399,17 +405,16 @@ pub fn pin_thread_to_cpu(_cpu: usize) -> Result<()> {
 /// A list of CPU IDs on the specified node, or an error.
 pub fn get_cpus_on_node(node: u32) -> Result<Vec<usize>> {
     let path = format!("/sys/devices/system/node/node{}/cpulist", node);
-    
-    let content = fs::read_to_string(&path)
-        .map_err(|_| NumaVerifyError::InvalidNode(node))?;
-    
+
+    let content = fs::read_to_string(&path).map_err(|_| NumaVerifyError::InvalidNode(node))?;
+
     parse_cpu_list(&content).ok_or(NumaVerifyError::TopologyReadError)
 }
 
 /// Parses a CPU list string (e.g., "0-3,8-11") into CPU IDs.
 fn parse_cpu_list(s: &str) -> Option<Vec<usize>> {
     let mut cpus = Vec::new();
-    
+
     for range in s.trim().split(',') {
         if range.contains('-') {
             let parts: Vec<&str> = range.split('-').collect();
@@ -425,14 +430,14 @@ fn parse_cpu_list(s: &str) -> Option<Vec<usize>> {
             cpus.push(cpu);
         }
     }
-    
+
     Some(cpus)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_detect_numa_topology() {
         // This test may pass or fail depending on the system
@@ -445,7 +450,7 @@ mod tests {
             println!("No NUMA topology detected (single node system)");
         }
     }
-    
+
     #[test]
     fn test_parse_cpu_list() {
         assert_eq!(parse_cpu_list("0-3"), Some(vec![0, 1, 2, 3]));
@@ -453,7 +458,7 @@ mod tests {
         assert_eq!(parse_cpu_list("0-1,4-5"), Some(vec![0, 1, 4, 5]));
         assert_eq!(parse_cpu_list("0"), Some(vec![0]));
     }
-    
+
     #[test]
     fn test_single_node_topology() {
         let topo = NumaTopology::single_node();
@@ -461,36 +466,35 @@ mod tests {
         assert!(!topo.is_numa);
         assert_eq!(topo.nodes, vec![0]);
     }
-    
+
     #[test]
     #[cfg(target_os = "linux")]
     fn test_get_physical_node_stack() {
         // Test with a stack variable
         let value: u64 = 42;
         let ptr = &value as *const u64 as *const u8;
-        
+
         // This may succeed or fail depending on privileges
         match get_physical_node(ptr) {
             Ok(node) => println!("Stack variable on node {}", node),
-            Err(e) => println!("Could not query node: {} (expected on unprivileged systems)", e),
+            Err(e) => println!(
+                "Could not query node: {} (expected on unprivileged systems)",
+                e
+            ),
         }
     }
-    
+
     #[test]
     #[cfg(target_os = "linux")]
     fn test_verify_heap_allocation() {
         // Allocate some heap memory
         let data: Vec<u8> = vec![0u8; 4096 * 10];
-        
+
         if let Some(topology) = detect_numa_topology() {
             if topology.is_numa && topology.nodes.len() >= 2 {
                 // On NUMA systems, verify we can query the location
-                let result = verify_buffer_placement(
-                    data.as_ptr(),
-                    data.len(),
-                    topology.nodes[0],
-                );
-                
+                let result = verify_buffer_placement(data.as_ptr(), data.len(), topology.nodes[0]);
+
                 println!("Buffer placement verification: {:?}", result);
             }
         }

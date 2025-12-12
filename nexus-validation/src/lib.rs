@@ -13,8 +13,8 @@
 //! - NUMA physical page placement verification
 
 pub mod confidence;
-pub mod statistical;
 pub mod numa_verify;
+pub mod statistical;
 
 use std::fmt;
 
@@ -337,7 +337,11 @@ impl fmt::Display for HypothesisTestResult {
         writeln!(
             f,
             "  Decision:  {} null hypothesis",
-            if self.reject_null { "Reject" } else { "Fail to reject" }
+            if self.reject_null {
+                "Reject"
+            } else {
+                "Fail to reject"
+            }
         )
     }
 }
@@ -475,11 +479,7 @@ impl BenchmarkComparison {
         };
 
         // Confidence interval for difference
-        let combined: Vec<f64> = baseline
-            .iter()
-            .chain(treatment.iter())
-            .cloned()
-            .collect();
+        let combined: Vec<f64> = baseline.iter().chain(treatment.iter()).cloned().collect();
         let ci = ConfidenceInterval::for_mean(&combined, config.confidence_level)?;
 
         let test_result = welch_t_test(baseline, treatment, config.alpha)?;
@@ -507,16 +507,36 @@ impl BenchmarkComparison {
 impl fmt::Display for BenchmarkComparison {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Benchmark Comparison:")?;
-        writeln!(f, "  Baseline:  {:.4} ± {:.4}", self.baseline_stats.mean, self.baseline_stats.std_dev)?;
-        writeln!(f, "  Treatment: {:.4} ± {:.4}", self.treatment_stats.mean, self.treatment_stats.std_dev)?;
-        writeln!(f, "  Difference: {:.4} ({:+.2}%)", self.difference, self.percent_change)?;
+        writeln!(
+            f,
+            "  Baseline:  {:.4} ± {:.4}",
+            self.baseline_stats.mean, self.baseline_stats.std_dev
+        )?;
+        writeln!(
+            f,
+            "  Treatment: {:.4} ± {:.4}",
+            self.treatment_stats.mean, self.treatment_stats.std_dev
+        )?;
+        writeln!(
+            f,
+            "  Difference: {:.4} ({:+.2}%)",
+            self.difference, self.percent_change
+        )?;
         writeln!(f, "  95% CI:    {}", self.confidence_interval)?;
         writeln!(f, "  P-value:   {:.6}", self.test_result.p_value)?;
-        writeln!(f, "  Effect:    {:.4} ({})", self.effect_size, self.effect_interpretation)?;
+        writeln!(
+            f,
+            "  Effect:    {:.4} ({})",
+            self.effect_size, self.effect_interpretation
+        )?;
         writeln!(
             f,
             "  Result:    {}{}",
-            if self.is_significant { "Statistically significant" } else { "Not significant" },
+            if self.is_significant {
+                "Statistically significant"
+            } else {
+                "Not significant"
+            },
             if self.is_significant && self.is_improvement {
                 " improvement"
             } else if self.is_significant {
@@ -663,11 +683,11 @@ impl BenchmarkValidator {
 /// Complexity class for scaling analysis
 #[derive(Debug, Clone, Copy)]
 pub enum Complexity {
-    Constant,    // O(1)
-    Logarithmic, // O(log n)
-    Linear,      // O(n)
+    Constant,     // O(1)
+    Logarithmic,  // O(log n)
+    Linear,       // O(n)
     Linearithmic, // O(n log n)
-    Quadratic,   // O(n²)
+    Quadratic,    // O(n²)
 }
 
 impl Complexity {
@@ -742,7 +762,8 @@ pub fn detect_outliers_iqr(data: &[f64]) -> Vec<usize> {
 
 /// Remove outliers and return cleaned data
 pub fn remove_outliers(data: &[f64]) -> Vec<f64> {
-    let outlier_indices: std::collections::HashSet<_> = detect_outliers_iqr(data).into_iter().collect();
+    let outlier_indices: std::collections::HashSet<_> =
+        detect_outliers_iqr(data).into_iter().collect();
     data.iter()
         .enumerate()
         .filter(|(i, _)| !outlier_indices.contains(i))

@@ -27,20 +27,24 @@
 //! The buffer uses atomic operations for borrow tracking, allowing multiple
 //! readers or a single writer at any time (similar to RwLock but without blocking).
 
-use core::sync::atomic::{AtomicU32, AtomicUsize, AtomicBool, Ordering};
 use core::marker::PhantomData;
-use core::ptr::NonNull;
 use core::mem::{self};
 use core::ops::{Deref, DerefMut};
+use core::ptr::NonNull;
 use core::slice;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 #[cfg(not(feature = "std"))]
-use alloc::{alloc::{alloc, dealloc, Layout}, boxed::Box, vec::Vec};
+use alloc::{
+    alloc::{alloc, dealloc, Layout},
+    boxed::Box,
+    vec::Vec,
+};
 
 #[cfg(feature = "std")]
 use std::alloc::{alloc, dealloc, Layout};
 
-use super::{ZeroCopyError, Result, Region};
+use super::{Region, Result, ZeroCopyError};
 
 /// Cache line size for alignment
 const CACHE_LINE: usize = 64;
@@ -73,19 +77,19 @@ const CACHE_LINE: usize = 64;
 pub struct ZeroCopyBuffer<T> {
     /// Pointer to the data region
     data: NonNull<T>,
-    
+
     /// Total capacity in elements
     capacity: usize,
-    
+
     /// Current number of valid elements
     len: AtomicUsize,
-    
+
     /// Number of active readers
     readers: AtomicU32,
-    
+
     /// Whether a writer is active
     writer: AtomicBool,
-    
+
     /// Marker for ownership semantics
     _marker: PhantomData<T>,
 }
@@ -134,19 +138,19 @@ impl<T> ZeroCopyBuffer<T> {
         let size = capacity
             .checked_mul(mem::size_of::<T>())
             .ok_or(ZeroCopyError::AllocationFailed)?;
-        
+
         let align = mem::align_of::<T>().max(CACHE_LINE);
-        
-        let layout = Layout::from_size_align(size, align)
-            .map_err(|_| ZeroCopyError::InvalidAlignment)?;
-        
+
+        let layout =
+            Layout::from_size_align(size, align).map_err(|_| ZeroCopyError::InvalidAlignment)?;
+
         // SAFETY: layout is valid and non-zero
         let ptr = unsafe { alloc(layout) };
-        
+
         if ptr.is_null() {
             return Err(ZeroCopyError::AllocationFailed);
         }
-        
+
         Ok(Self {
             data: NonNull::new(ptr as *mut T).unwrap(),
             capacity,
@@ -228,14 +232,14 @@ impl<T> ZeroCopyBuffer<T> {
     pub fn push(&self, value: T) -> Result<usize> {
         loop {
             let current_len = self.len.load(Ordering::Acquire);
-            
+
             if current_len >= self.capacity {
                 return Err(ZeroCopyError::InsufficientCapacity {
                     required: current_len + 1,
                     available: self.capacity,
                 });
             }
-            
+
             // Try to claim the slot
             match self.len.compare_exchange_weak(
                 current_len,
@@ -268,12 +272,15 @@ impl<T> ZeroCopyBuffer<T> {
     /// # Safety
     ///
     /// The caller must ensure exclusive write access to the affected region.
-    pub unsafe fn write(&self, offset: usize, data: &[T]) 
+    pub unsafe fn write(&self, offset: usize, data: &[T])
     where
         T: Copy,
     {
-        assert!(offset + data.len() <= self.capacity, "Write exceeds capacity");
-        
+        assert!(
+            offset + data.len() <= self.capacity,
+            "Write exceeds capacity"
+        );
+
         // SAFETY: Caller ensures exclusive access
         unsafe {
             core::ptr::copy_nonoverlapping(
@@ -282,18 +289,21 @@ impl<T> ZeroCopyBuffer<T> {
                 data.len(),
             );
         }
-        
+
         // Update length if we've extended it
         loop {
             let current = self.len.load(Ordering::Acquire);
             let new_len = (offset + data.len()).max(current);
-            
+
             if current == new_len {
                 break;
             }
-            
+
             match self.len.compare_exchange_weak(
-                current, new_len, Ordering::AcqRel, Ordering::Acquire
+                current,
+                new_len,
+                Ordering::AcqRel,
+                Ordering::Acquire,
             ) {
                 Ok(_) => break,
                 Err(_) => continue,
@@ -311,16 +321,16 @@ impl<T> ZeroCopyBuffer<T> {
         if self.writer.load(Ordering::Acquire) {
             return Err(ZeroCopyError::BorrowConflict);
         }
-        
+
         // Increment reader count
         self.readers.fetch_add(1, Ordering::AcqRel);
-        
+
         // Double-check no writer became active
         if self.writer.load(Ordering::Acquire) {
             self.readers.fetch_sub(1, Ordering::AcqRel);
             return Err(ZeroCopyError::BorrowConflict);
         }
-        
+
         Ok(BufferRef {
             buffer: self,
             _marker: PhantomData,
@@ -334,18 +344,20 @@ impl<T> ZeroCopyBuffer<T> {
     /// Returns `Err` if any readers or another writer is active.
     pub fn try_borrow_mut(&self) -> Result<BufferMut<'_, T>> {
         // Try to set writer flag
-        if self.writer.compare_exchange(
-            false, true, Ordering::AcqRel, Ordering::Acquire
-        ).is_err() {
+        if self
+            .writer
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             return Err(ZeroCopyError::BorrowConflict);
         }
-        
+
         // Check for active readers
         if self.readers.load(Ordering::Acquire) > 0 {
             self.writer.store(false, Ordering::Release);
             return Err(ZeroCopyError::BorrowConflict);
         }
-        
+
         Ok(BufferMut {
             buffer: self,
             _marker: PhantomData,
@@ -360,9 +372,7 @@ impl<T> ZeroCopyBuffer<T> {
     #[inline]
     pub unsafe fn as_slice(&self) -> &[T] {
         // SAFETY: Caller ensures safety
-        unsafe {
-            slice::from_raw_parts(self.data.as_ptr(), self.len())
-        }
+        unsafe { slice::from_raw_parts(self.data.as_ptr(), self.len()) }
     }
 
     /// Returns a mutable reference to the underlying data as a slice.
@@ -374,9 +384,7 @@ impl<T> ZeroCopyBuffer<T> {
     pub unsafe fn as_mut_slice(&mut self) -> &mut [T] {
         let len = self.len();
         // SAFETY: We have &mut self
-        unsafe {
-            slice::from_raw_parts_mut(self.data.as_ptr(), len)
-        }
+        unsafe { slice::from_raw_parts_mut(self.data.as_ptr(), len) }
     }
 
     /// Clears the buffer, resetting the length to zero.
@@ -394,24 +402,24 @@ impl<T> ZeroCopyBuffer<T> {
                 }
             }
         }
-        
+
         self.len.store(0, Ordering::Release);
     }
 
     /// Creates a view into a region of the buffer.
     pub fn region(&self, region: Region) -> Result<BufferRegion<'_, T>> {
         let len = self.len();
-        
+
         if region.end() > len {
             return Err(ZeroCopyError::OutOfBounds {
                 index: region.end(),
                 len,
             });
         }
-        
+
         // Try to borrow
         let _ref = self.try_borrow()?;
-        
+
         Ok(BufferRegion {
             buffer: self,
             region,
@@ -426,11 +434,11 @@ impl<T> Drop for ZeroCopyBuffer<T> {
             // Drop elements
             // SAFETY: We have exclusive access in Drop
             unsafe { self.clear() };
-            
+
             // Deallocate memory
             let size = self.capacity * mem::size_of::<T>();
             let align = mem::align_of::<T>().max(CACHE_LINE);
-            
+
             if let Ok(layout) = Layout::from_size_align(size, align) {
                 // SAFETY: layout matches original allocation
                 unsafe {
@@ -523,9 +531,7 @@ impl<'a, T> BufferMut<'a, T> {
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         let len = self.len();
         // SAFETY: We have exclusive access
-        unsafe {
-            slice::from_raw_parts_mut(self.buffer.data.as_ptr(), len)
-        }
+        unsafe { slice::from_raw_parts_mut(self.buffer.data.as_ptr(), len) }
     }
 }
 
@@ -657,11 +663,11 @@ mod tests {
     #[test]
     fn test_push() {
         let buffer = ZeroCopyBuffer::<i32>::new(10);
-        
+
         buffer.push(1).unwrap();
         buffer.push(2).unwrap();
         buffer.push(3).unwrap();
-        
+
         assert_eq!(buffer.len(), 3);
         assert_eq!(buffer.get(0), Some(&1));
         assert_eq!(buffer.get(1), Some(&2));
@@ -671,10 +677,10 @@ mod tests {
     #[test]
     fn test_full_buffer() {
         let buffer = ZeroCopyBuffer::<i32>::new(2);
-        
+
         buffer.push(1).unwrap();
         buffer.push(2).unwrap();
-        
+
         let result = buffer.push(3);
         assert!(result.is_err());
     }
@@ -683,10 +689,10 @@ mod tests {
     fn test_borrow() {
         let buffer = ZeroCopyBuffer::<i32>::new(10);
         buffer.push(42).unwrap();
-        
+
         let ref1 = buffer.try_borrow().unwrap();
         let ref2 = buffer.try_borrow().unwrap();
-        
+
         assert_eq!(ref1.get(0), Some(&42));
         assert_eq!(ref2.get(0), Some(&42));
     }
@@ -695,21 +701,21 @@ mod tests {
     fn test_borrow_mut_conflict() {
         let buffer = ZeroCopyBuffer::<i32>::new(10);
         buffer.push(42).unwrap();
-        
+
         let _ref1 = buffer.try_borrow().unwrap();
         let result = buffer.try_borrow_mut();
-        
+
         assert!(result.is_err());
     }
 
     #[test]
     fn test_region() {
         let buffer = ZeroCopyBuffer::<i32>::new(100);
-        
+
         for i in 0..50 {
             buffer.push(i).unwrap();
         }
-        
+
         let region = buffer.region(Region::new(10, 20)).unwrap();
         assert_eq!(region.len(), 20);
         assert_eq!(region.get(0), Some(&10));
@@ -718,11 +724,9 @@ mod tests {
 
     #[test]
     fn test_builder() {
-        let buffer: ZeroCopyBuffer<u64> = ZeroCopyBufferBuilder::new()
-            .capacity(50)
-            .build()
-            .unwrap();
-        
+        let buffer: ZeroCopyBuffer<u64> =
+            ZeroCopyBufferBuilder::new().capacity(50).build().unwrap();
+
         assert_eq!(buffer.capacity(), 50);
     }
 }

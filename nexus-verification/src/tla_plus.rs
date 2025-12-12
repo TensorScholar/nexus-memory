@@ -148,7 +148,11 @@ pub enum SafetyViolation {
     /// Double free detected
     DoubleFree { object_id: u64 },
     /// Epoch invariant violated
-    EpochInvariant { thread: usize, local: u64, global: u64 },
+    EpochInvariant {
+        thread: usize,
+        local: u64,
+        global: u64,
+    },
     /// Premature reclamation
     PrematureReclamation { object_id: u64, retire_epoch: u64 },
 }
@@ -162,14 +166,21 @@ impl fmt::Display for SafetyViolation {
             SafetyViolation::DoubleFree { object_id } => {
                 write!(f, "Double-free: object {}", object_id)
             }
-            SafetyViolation::EpochInvariant { thread, local, global } => {
+            SafetyViolation::EpochInvariant {
+                thread,
+                local,
+                global,
+            } => {
                 write!(
                     f,
                     "Epoch invariant: thread {} has local {} > global {}",
                     thread, local, global
                 )
             }
-            SafetyViolation::PrematureReclamation { object_id, retire_epoch } => {
+            SafetyViolation::PrematureReclamation {
+                object_id,
+                retire_epoch,
+            } => {
                 write!(
                     f,
                     "Premature reclamation: object {} retired at epoch {}",
@@ -256,7 +267,11 @@ impl fmt::Display for Counterexample {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Counterexample trace:")?;
         for (i, (state, action)) in self.states.iter().zip(self.actions.iter()).enumerate() {
-            writeln!(f, "  Step {}: {} -> epoch={}", i, action, state.global_epoch)?;
+            writeln!(
+                f,
+                "  Step {}: {} -> epoch={}",
+                i, action, state.global_epoch
+            )?;
         }
         writeln!(f, "  Violation: {}", self.violation)
     }
@@ -363,7 +378,10 @@ impl ModelChecker {
             if state.pinned[thread] {
                 for &obj in &state.accessed {
                     if !state.freed.contains(&obj) {
-                        actions.push(Action::Retire { thread, object_id: obj });
+                        actions.push(Action::Retire {
+                            thread,
+                            object_id: obj,
+                        });
                     }
                 }
             }
@@ -712,13 +730,17 @@ mod tests {
         let checker = ModelChecker::new(config);
 
         let state = TlaState::initial(2);
-        let pinned = checker.apply_action(&state, &Action::Pin { thread: 0 }).unwrap();
+        let pinned = checker
+            .apply_action(&state, &Action::Pin { thread: 0 })
+            .unwrap();
 
         assert!(pinned.pinned[0]);
         assert!(!pinned.pinned[1]);
         assert_eq!(pinned.local_epochs[0], 0);
 
-        let unpinned = checker.apply_action(&pinned, &Action::Unpin { thread: 0 }).unwrap();
+        let unpinned = checker
+            .apply_action(&pinned, &Action::Unpin { thread: 0 })
+            .unwrap();
         assert!(!unpinned.pinned[0]);
     }
 
@@ -741,14 +763,26 @@ mod tests {
         let mut state = TlaState::initial(2);
 
         // Pin thread 0
-        state = checker.apply_action(&state, &Action::Pin { thread: 0 }).unwrap();
+        state = checker
+            .apply_action(&state, &Action::Pin { thread: 0 })
+            .unwrap();
 
         // Allocate object
-        state = checker.apply_action(&state, &Action::Allocate { thread: 0 }).unwrap();
+        state = checker
+            .apply_action(&state, &Action::Allocate { thread: 0 })
+            .unwrap();
         assert!(state.accessed.contains(&0));
 
         // Retire object
-        state = checker.apply_action(&state, &Action::Retire { thread: 0, object_id: 0 }).unwrap();
+        state = checker
+            .apply_action(
+                &state,
+                &Action::Retire {
+                    thread: 0,
+                    object_id: 0,
+                },
+            )
+            .unwrap();
         assert!(!state.accessed.contains(&0));
         assert_eq!(state.garbage[0].len(), 1);
 
@@ -757,10 +791,14 @@ mod tests {
         state = checker.apply_action(&state, &Action::AdvanceEpoch).unwrap();
 
         // Unpin thread
-        state = checker.apply_action(&state, &Action::Unpin { thread: 0 }).unwrap();
+        state = checker
+            .apply_action(&state, &Action::Unpin { thread: 0 })
+            .unwrap();
 
         // Reclaim
-        state = checker.apply_action(&state, &Action::Reclaim { thread: 0 }).unwrap();
+        state = checker
+            .apply_action(&state, &Action::Reclaim { thread: 0 })
+            .unwrap();
         assert!(state.freed.contains(&0));
         assert!(state.garbage[0].is_empty());
     }
@@ -772,7 +810,10 @@ mod tests {
         state.freed.insert(42);
 
         let result = state.check_safety();
-        assert!(matches!(result, Err(SafetyViolation::UseAfterFree { object_id: 42 })));
+        assert!(matches!(
+            result,
+            Err(SafetyViolation::UseAfterFree { object_id: 42 })
+        ));
     }
 
     #[test]
@@ -790,7 +831,11 @@ mod tests {
         let result = checker.check();
 
         // The protocol should be safe
-        assert!(result.success, "Model checking found violation: {:?}", result.counterexample);
+        assert!(
+            result.success,
+            "Model checking found violation: {:?}",
+            result.counterexample
+        );
         assert!(result.states_explored > 0);
     }
 

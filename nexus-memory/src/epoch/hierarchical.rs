@@ -39,7 +39,7 @@
 use crate::sync::atomic::Ordering;
 use crate::sync::sync::Mutex;
 
-use super::{Epoch, AtomicEpoch, INACTIVE};
+use super::{AtomicEpoch, Epoch, INACTIVE};
 
 #[cfg(feature = "bench-metrics")]
 use std::time::Instant;
@@ -83,18 +83,18 @@ const MAX_DEPTH: usize = 4;
 pub struct HierarchicalEpoch {
     /// Thread-local epochs stored as flat array
     local_epochs: Vec<AtomicEpoch>,
-    
+
     /// Aggregation levels (each level aggregates BRANCHING_FACTOR children)
     /// aggregation[0] = aggregates of local_epochs
     /// aggregation[k] = aggregates of aggregation[k-1]
     aggregation: Vec<Vec<AtomicEpoch>>,
-    
+
     /// Locks for aggregating nodes (avoids lost updates during propagation)
     aggregation_locks: Vec<Vec<Mutex<()>>>,
-    
+
     /// Number of supported threads
     capacity: usize,
-    
+
     /// Current tree depth
     depth: usize,
 }
@@ -111,27 +111,27 @@ impl HierarchicalEpoch {
     /// Panics if capacity exceeds the maximum supported (BRANCHING_FACTOR^MAX_DEPTH = 256).
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "Capacity must be positive");
-        
+
         // Calculate tree depth needed
         let depth = Self::compute_depth(capacity);
         let actual_capacity = BRANCHING_FACTOR.pow(depth as u32);
-        
+
         assert!(
             depth <= MAX_DEPTH,
             "Capacity {} exceeds maximum supported ({})",
             capacity,
             BRANCHING_FACTOR.pow(MAX_DEPTH as u32)
         );
-        
+
         // Create local epochs
         let local_epochs: Vec<AtomicEpoch> = (0..actual_capacity)
             .map(|_| AtomicEpoch::new(INACTIVE))
             .collect();
-        
+
         // Create aggregation levels
         let mut aggregation = Vec::new();
         let mut level_size = actual_capacity;
-        
+
         while level_size > 1 {
             level_size = (level_size + BRANCHING_FACTOR - 1) / BRANCHING_FACTOR;
             let level: Vec<AtomicEpoch> = (0..level_size)
@@ -139,13 +139,11 @@ impl HierarchicalEpoch {
                 .collect();
             aggregation.push(level);
         }
-        
+
         // Create aggregation locks (mirroring aggregation structure)
         let mut aggregation_locks = Vec::new();
         for level in &aggregation {
-            let level_locks: Vec<Mutex<()>> = (0..level.len())
-                .map(|_| Mutex::new(()))
-                .collect();
+            let level_locks: Vec<Mutex<()>> = (0..level.len()).map(|_| Mutex::new(())).collect();
             aggregation_locks.push(level_locks);
         }
 
@@ -163,15 +161,15 @@ impl HierarchicalEpoch {
         if capacity <= 1 {
             return 1;
         }
-        
+
         let mut depth = 1;
         let mut size = BRANCHING_FACTOR;
-        
+
         while size < capacity {
             depth += 1;
             size *= BRANCHING_FACTOR;
         }
-        
+
         depth
     }
 
@@ -195,9 +193,9 @@ impl HierarchicalEpoch {
         let start = Instant::now();
 
         assert!(thread_id < self.capacity, "Thread ID out of range");
-        
+
         let old_epoch = self.local_epochs[thread_id].swap(epoch, Ordering::SeqCst);
-        
+
         // Propagate upward if epoch changed
         if old_epoch != epoch {
             self.propagate_from(thread_id);
@@ -230,7 +228,7 @@ impl HierarchicalEpoch {
 
         // Ensure aggregation is up-to-date
         // self.aggregate_all(); // REMOVED: This causes O(T) complexity. Updates are propagated via propagate_from (O(log T)).
-        
+
         let result = if self.aggregation.is_empty() {
             // Only one thread, return directly
             self.local_epochs[0].load(Ordering::SeqCst)
@@ -260,15 +258,15 @@ impl HierarchicalEpoch {
         if self.aggregation.is_empty() {
             return;
         }
-        
+
         let mut idx = thread_id;
-        
+
         // First level aggregates local_epochs
         {
             let parent_idx = idx / BRANCHING_FACTOR;
             let start = parent_idx * BRANCHING_FACTOR;
             let end = (start + BRANCHING_FACTOR).min(self.local_epochs.len());
-            
+
             // Lock the parent node to ensure atomic read-modify-write relative to siblings
             let _lock = self.aggregation_locks[0][parent_idx].lock().unwrap();
 
@@ -278,20 +276,22 @@ impl HierarchicalEpoch {
                 .filter(|&e| e != INACTIVE)
                 .min()
                 .unwrap_or(INACTIVE);
-            
+
             self.aggregation[0][parent_idx].store(min, Ordering::SeqCst);
             idx = parent_idx;
         }
-        
+
         // Higher levels aggregate previous level
         for level_idx in 1..self.aggregation.len() {
             let parent_idx = idx / BRANCHING_FACTOR;
             let start = parent_idx * BRANCHING_FACTOR;
             let prev_len = self.aggregation[level_idx - 1].len();
             let end = (start + BRANCHING_FACTOR).min(prev_len);
-            
+
             // Lock the parent node
-            let _lock = self.aggregation_locks[level_idx][parent_idx].lock().unwrap();
+            let _lock = self.aggregation_locks[level_idx][parent_idx]
+                .lock()
+                .unwrap();
 
             let min = self.aggregation[level_idx - 1][start..end]
                 .iter()
@@ -299,7 +299,7 @@ impl HierarchicalEpoch {
                 .filter(|&e| e != INACTIVE)
                 .min()
                 .unwrap_or(INACTIVE);
-            
+
             self.aggregation[level_idx][parent_idx].store(min, Ordering::SeqCst);
             idx = parent_idx;
         }
@@ -312,33 +312,33 @@ impl HierarchicalEpoch {
             for (i, agg) in level0.iter().enumerate() {
                 let start = i * BRANCHING_FACTOR;
                 let end = (start + BRANCHING_FACTOR).min(self.local_epochs.len());
-                
+
                 let min = self.local_epochs[start..end]
                     .iter()
                     .map(|e| e.load(Ordering::SeqCst))
                     .filter(|&e| e != INACTIVE)
                     .min()
                     .unwrap_or(INACTIVE);
-                
+
                 agg.store(min, Ordering::SeqCst);
             }
         }
-        
+
         // Aggregate higher levels
         for level_idx in 1..self.aggregation.len() {
             let prev_level_len = self.aggregation[level_idx - 1].len();
-            
+
             for i in 0..self.aggregation[level_idx].len() {
                 let start = i * BRANCHING_FACTOR;
                 let end = (start + BRANCHING_FACTOR).min(prev_level_len);
-                
+
                 let min = self.aggregation[level_idx - 1][start..end]
                     .iter()
                     .map(|e| e.load(Ordering::SeqCst))
                     .filter(|&e| e != INACTIVE)
                     .min()
                     .unwrap_or(INACTIVE);
-                
+
                 self.aggregation[level_idx][i].store(min, Ordering::SeqCst);
             }
         }
@@ -358,7 +358,8 @@ impl HierarchicalEpoch {
 
     /// Returns the number of currently active threads.
     pub fn active_count(&self) -> usize {
-        self.local_epochs.iter()
+        self.local_epochs
+            .iter()
             .filter(|e| e.load(Ordering::Relaxed) != INACTIVE)
             .count()
     }
@@ -373,17 +374,15 @@ pub struct HierarchicalEpochBuilder {
 impl HierarchicalEpochBuilder {
     /// Creates a new builder with default settings.
     pub fn new() -> Self {
-        Self {
-            capacity: 16,
-        }
+        Self { capacity: 16 }
     }
-    
+
     /// Sets the maximum number of threads.
     pub fn capacity(mut self, capacity: usize) -> Self {
         self.capacity = capacity;
         self
     }
-    
+
     /// Builds the HierarchicalEpoch instance.
     pub fn build(self) -> HierarchicalEpoch {
         HierarchicalEpoch::new(self.capacity)
@@ -416,7 +415,7 @@ mod tests {
     #[test]
     fn test_basic_operations() {
         let hier = HierarchicalEpoch::new(16);
-        
+
         assert_eq!(hier.capacity(), 16);
         assert_eq!(hier.global_minimum(), INACTIVE);
     }
@@ -424,14 +423,14 @@ mod tests {
     #[test]
     fn test_local_update() {
         let hier = HierarchicalEpoch::new(16);
-        
+
         // Initially inactive
         assert_eq!(hier.local_epoch(0), INACTIVE);
-        
+
         // Update to epoch 5
         hier.update_local(0, 5);
         assert_eq!(hier.local_epoch(0), 5);
-        
+
         // Global minimum should now be 5
         assert_eq!(hier.global_minimum(), 5);
     }
@@ -439,11 +438,11 @@ mod tests {
     #[test]
     fn test_multiple_threads() {
         let hier = HierarchicalEpoch::new(16);
-        
+
         hier.update_local(0, 5);
         hier.update_local(1, 3);
         hier.update_local(2, 7);
-        
+
         // Minimum should be 3
         assert_eq!(hier.global_minimum(), 3);
     }
@@ -451,11 +450,11 @@ mod tests {
     #[test]
     fn test_inactive_threads_ignored() {
         let hier = HierarchicalEpoch::new(16);
-        
+
         hier.update_local(0, 5);
         hier.update_local(1, INACTIVE);
         hier.update_local(2, 3);
-        
+
         // Thread 1 is inactive, so minimum is 3
         assert_eq!(hier.global_minimum(), 3);
     }
@@ -463,36 +462,34 @@ mod tests {
     #[test]
     fn test_can_reclaim() {
         let hier = HierarchicalEpoch::new(16);
-        
+
         hier.update_local(0, 5);
-        
-        assert!(!hier.can_reclaim(5));  // Can't reclaim current epoch
-        assert!(hier.can_reclaim(4));   // Can reclaim earlier epochs
+
+        assert!(!hier.can_reclaim(5)); // Can't reclaim current epoch
+        assert!(hier.can_reclaim(4)); // Can reclaim earlier epochs
         assert!(hier.can_reclaim(0));
     }
 
     #[test]
     fn test_active_count() {
         let hier = HierarchicalEpoch::new(16);
-        
+
         assert_eq!(hier.active_count(), 0);
-        
+
         hier.update_local(0, 5);
         assert_eq!(hier.active_count(), 1);
-        
+
         hier.update_local(1, 3);
         assert_eq!(hier.active_count(), 2);
-        
+
         hier.update_local(0, INACTIVE);
         assert_eq!(hier.active_count(), 1);
     }
 
     #[test]
     fn test_builder() {
-        let hier = HierarchicalEpochBuilder::new()
-            .capacity(32)
-            .build();
-        
+        let hier = HierarchicalEpochBuilder::new().capacity(32).build();
+
         assert_eq!(hier.capacity(), 64); // Rounded up to power of branching factor
     }
 }

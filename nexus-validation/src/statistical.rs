@@ -5,9 +5,13 @@
 use crate::{DescriptiveStats, HypothesisTestResult};
 
 /// Mann-Whitney U test (non-parametric alternative to t-test)
-/// 
+///
 /// Tests whether two independent samples come from the same distribution.
-pub fn mann_whitney_u(sample1: &[f64], sample2: &[f64], alpha: f64) -> Option<HypothesisTestResult> {
+pub fn mann_whitney_u(
+    sample1: &[f64],
+    sample2: &[f64],
+    alpha: f64,
+) -> Option<HypothesisTestResult> {
     let n1 = sample1.len();
     let n2 = sample2.len();
 
@@ -75,7 +79,7 @@ pub fn mann_whitney_u(sample1: &[f64], sample2: &[f64], alpha: f64) -> Option<Hy
 }
 
 /// Shapiro-Wilk test for normality (simplified approximation)
-/// 
+///
 /// Tests whether a sample comes from a normally distributed population.
 pub fn shapiro_wilk(data: &[f64], alpha: f64) -> Option<HypothesisTestResult> {
     let n = data.len();
@@ -278,7 +282,7 @@ pub fn kruskal_wallis(samples: &[&[f64]], alpha: f64) -> Option<HypothesisTestRe
 }
 
 /// Effect size: Cliff's delta (non-parametric)
-/// 
+///
 /// Measures the probability that a randomly selected value from one group
 /// is greater than a randomly selected value from another group.
 pub fn cliffs_delta(sample1: &[f64], sample2: &[f64]) -> Option<f64> {

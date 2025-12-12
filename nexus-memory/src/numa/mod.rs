@@ -35,11 +35,11 @@
 //! - macOS: Simulated (single NUMA node)
 //! - Windows: Partial support via Windows API
 
-mod topology;
 mod allocator;
+mod topology;
 
-pub use topology::{NumaTopology, NodeId, CpuSet};
-pub use allocator::{NumaAllocator, AllocationPolicy};
+pub use allocator::{AllocationPolicy, NumaAllocator};
+pub use topology::{CpuSet, NodeId, NumaTopology};
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -51,19 +51,19 @@ pub const MAX_NUMA_NODES: usize = 64;
 pub enum NumaError {
     /// NUMA is not available on this system
     Unavailable,
-    
+
     /// Invalid NUMA node ID
     InvalidNode(u32),
-    
+
     /// Memory allocation failed
     AllocationFailed,
-    
+
     /// Thread affinity operation failed
     AffinityError,
-    
+
     /// Topology discovery failed
     TopologyError,
-    
+
     /// Operation not supported on this platform
     NotSupported,
 }
@@ -94,23 +94,28 @@ pub type Result<T> = core::result::Result<T, NumaError>;
 pub struct NumaNode {
     /// Node identifier
     id: u32,
-    
+
     /// CPUs associated with this node
     cpus: CpuSet,
-    
+
     /// Total memory in bytes
     total_memory: u64,
-    
+
     /// Available memory in bytes
     available_memory: AtomicU64,
-    
+
     /// Distance to other nodes (index = node id, value = distance)
     distances: [u8; MAX_NUMA_NODES],
 }
 
 impl NumaNode {
     /// Creates a new NUMA node.
-    pub(crate) fn new(id: u32, cpus: CpuSet, total_memory: u64, distances: [u8; MAX_NUMA_NODES]) -> Self {
+    pub(crate) fn new(
+        id: u32,
+        cpus: CpuSet,
+        total_memory: u64,
+        distances: [u8; MAX_NUMA_NODES],
+    ) -> Self {
         Self {
             id,
             cpus,
@@ -166,16 +171,16 @@ impl NumaNode {
 pub enum MemoryPolicy {
     /// Allocate on the local node (default)
     Local,
-    
+
     /// Bind to a specific node
     Bind(u32),
-    
+
     /// Prefer a specific node but allow fallback
     Prefer(u32),
-    
+
     /// Interleave pages across all nodes
     Interleave,
-    
+
     /// Interleave across specified nodes
     InterleaveNodes(u64), // Bitmask of nodes
 }
@@ -191,13 +196,13 @@ impl Default for MemoryPolicy {
 pub struct NumaStats {
     /// Total bytes allocated per node
     pub bytes_allocated: [AtomicU64; MAX_NUMA_NODES],
-    
+
     /// Total allocations per node
     pub allocation_count: [AtomicU64; MAX_NUMA_NODES],
-    
+
     /// Local memory accesses
     pub local_accesses: AtomicU64,
-    
+
     /// Remote memory accesses
     pub remote_accesses: AtomicU64,
 }
@@ -244,7 +249,7 @@ impl NumaStats {
     pub fn locality_ratio(&self) -> f64 {
         let local = self.local_accesses.load(Ordering::Relaxed) as f64;
         let remote = self.remote_accesses.load(Ordering::Relaxed) as f64;
-        
+
         if local + remote > 0.0 {
             local / (local + remote)
         } else {
@@ -266,11 +271,11 @@ mod tests {
     #[test]
     fn test_numa_stats() {
         let stats = NumaStats::default();
-        
+
         stats.record_allocation(0, 1024);
         stats.record_access(true);
         stats.record_access(false);
-        
+
         assert_eq!(stats.bytes_allocated[0].load(Ordering::Relaxed), 1024);
         assert_eq!(stats.locality_ratio(), 0.5);
     }
