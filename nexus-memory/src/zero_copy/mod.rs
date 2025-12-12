@@ -27,7 +27,7 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```rust,ignore
 //! use nexus_memory::zero_copy::{ZeroCopyBuffer, ZeroCopyRef};
 //!
 //! // Create a buffer

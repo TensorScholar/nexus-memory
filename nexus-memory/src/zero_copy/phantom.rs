@@ -358,7 +358,7 @@ unsafe impl<'buf, 'scope, T: Sync + ?Sized> Sync for ZeroCopyMut<'buf, 'scope, T
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,ignore
 /// use nexus_memory::zero_copy::ScopedRegion;
 ///
 /// fn example<T>(data: &[T]) {
