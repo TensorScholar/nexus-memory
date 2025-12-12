@@ -1,0 +1,17 @@
+name,thread_count,mean_ns,p50_ns,p99_ns,throughput
+rcu_read_section,1,55.83,42.00,84.00,17911452.94
+rcu_synchronize,1,50.46,42.00,84.00,19816499.22
+rcu_read_section,2,34.09,41.50,42.00,29333341.16
+rcu_synchronize,2,50.58,42.00,84.00,19771833.05
+rcu_read_section,4,29.39,20.75,31.25,34030736.56
+rcu_synchronize,4,46.38,42.00,125.00,21562877.35
+rcu_read_section,8,15.89,15.62,20.88,62923900.62
+rcu_synchronize,8,45.08,42.00,84.00,22183278.24
+rcu_read_section,16,9.53,10.38,13.06,104877319.76
+rcu_synchronize,16,47.29,42.00,84.00,21145672.54
+rcu_read_section,32,4.33,3.91,5.22,230736894.32
+rcu_synchronize,32,89.01,83.00,125.00,11234566.51
+rcu_read_section,64,3.73,3.91,5.22,268102579.40
+rcu_synchronize,64,90.42,83.00,208.00,11059989.38
+rcu_read_section,128,2.90,2.93,3.26,344620646.71
+rcu_synchronize,128,187.04,167.00,292.00,5346421.37

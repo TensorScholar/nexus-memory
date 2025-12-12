@@ -36,17 +36,17 @@ print_header() {
 
 print_ok() {
     echo -e "[${GREEN}OK${NC}] $1"
-    ((PASSED++))
+    ((++PASSED))
 }
 
 print_warn() {
     echo -e "[${YELLOW}WARN${NC}] $1"
-    ((WARNED++))
+    ((++WARNED))
 }
 
 print_fail() {
     echo -e "[${RED}FAIL${NC}] $1"
-    ((FAILED++))
+    ((++FAILED))
 }
 
 print_info() {

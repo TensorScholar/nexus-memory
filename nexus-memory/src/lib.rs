@@ -64,6 +64,10 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
+// Suppress common warnings for research artifact with experimental modules
+#![allow(dead_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
 
 #[cfg(not(feature = "std"))]
 extern crate alloc;

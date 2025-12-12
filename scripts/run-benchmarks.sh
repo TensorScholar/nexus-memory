@@ -132,7 +132,7 @@ run_epoch_benchmarks() {
         log "  Thread count: $threads"
         
         # Pin/unpin latency
-        cargo bench --bench epoch_benchmarks -- \
+        cargo bench --bench epoch_benchmark -- \
             --threads $threads \
             --iterations $ITERATIONS 2>/dev/null || {
             warn "Benchmark not available, using fallback"
