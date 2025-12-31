@@ -341,21 +341,27 @@ impl HierarchicalEpoch {
             loop {
                 let current = self.aggregation[0][parent_idx].load(Ordering::Relaxed);
                 
-                // CORRECTED LOGIC: Parent should hold minimum of children
-                // Skip update only if: current == min (synchronized) OR current < min (parent already better)
-                // CRITICAL FIX: Changed from "current <= min" to "current < min" to allow min=current case to skip
-                
+                // Check if already synchronized
                 if current == min {
-                    break;  // Already synchronized
+                    break;
                 }
                 
-                // Skip if parent already has a smaller (more conservative) value
-                // Exception: Always update when transitioning to/from INACTIVE
-                if current != INACTIVE && min != INACTIVE && current < min {
-                    break;  // Parent already more conservative, skip
+                // Determine if this update represents valid progress
+                // In epoch reclamation: SMALLER = more conservative (safer)
+                // Allow INACTIVE transitions and updates where min < current (more conservative)
+                let is_valid_progress = if current == INACTIVE {
+                    true  // Transition from INACTIVE
+                } else if min == INACTIVE {
+                    true  // Transition to INACTIVE
+                } else {
+                    min < current  // Update to more conservative (smaller) epoch
+                };
+                
+                if !is_valid_progress {
+                    break;  // Not valid progress, skip update
                 }
                 
-                // Update: min < current (improvement) OR INACTIVE transitions
+                // Attempt update
                 match self.aggregation[0][parent_idx].compare_exchange_weak(
                     current,
                     min,
@@ -387,7 +393,7 @@ impl HierarchicalEpoch {
                 .min()
                 .unwrap_or(INACTIVE);
 
-            // LOCK-FREE UPDATE: Same corrected logic as level 0
+            // LOCK-FREE UPDATE: Same is_valid_progress logic as level 0
             loop {
                 let current = self.aggregation[level_idx][parent_idx].load(Ordering::Relaxed);
                 
@@ -395,7 +401,15 @@ impl HierarchicalEpoch {
                     break;
                 }
                 
-                if current != INACTIVE && min != INACTIVE && current < min {
+                let is_valid_progress = if current == INACTIVE {
+                    true
+                } else if min == INACTIVE {
+                    true
+                } else {
+                    min < current
+                };
+                
+                if !is_valid_progress {
                     break;
                 }
                 
