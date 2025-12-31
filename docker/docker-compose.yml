@@ -1,0 +1,83 @@
+# Docker Compose configuration for Nexus Memory evaluation
+#
+# Provides multi-container setup for comprehensive benchmarking:
+# - nexus-bench: Main benchmark runner
+# - nexus-analysis: Jupyter notebook for interactive analysis
+# - nexus-report: Report generation service
+#
+# Usage:
+#   docker-compose up nexus-bench      # Run benchmarks
+#   docker-compose up nexus-analysis   # Start Jupyter for analysis
+#   docker-compose up                  # Run all services
+
+services:
+  nexus-bench:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: nexus-benchmarks
+    volumes:
+      - ../results:/workspace/results
+      - ../figures:/workspace/figures
+    environment:
+      - RUST_LOG=info
+      - NEXUS_ITERATIONS=10000
+    command: ["./scripts/reproduce-all.sh", "--full"]
+    deploy:
+      resources:
+        limits:
+          cpus: '16'
+          memory: 32G
+    # Enable NUMA awareness if available
+    privileged: true
+
+  nexus-quick:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: nexus-quick
+    volumes:
+      - ../results:/workspace/results
+    command: ["./scripts/reproduce-all.sh", "--quick"]
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+
+  nexus-analysis:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: nexus-analysis
+    ports:
+      - "8888:8888"
+    volumes:
+      - ../results:/workspace/results
+      - ../figures:/workspace/figures
+      - ../scripts:/workspace/scripts
+    command: >
+      jupyter notebook
+      --ip=0.0.0.0
+      --port=8888
+      --no-browser
+      --allow-root
+      --NotebookApp.token=''
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+
+  nexus-report:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: nexus-report
+    volumes:
+      - ../results:/workspace/results
+      - ../figures:/workspace/figures
+    command: ["python3", "scripts/generate-figures.py", "--input-dir", "/workspace/results", "--output-dir", "/workspace/figures"]
+    depends_on:
+      - nexus-bench
+
+volumes:
+  results:
+  figures:

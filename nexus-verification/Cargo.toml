@@ -1,0 +1,24 @@
+[package]
+name = "nexus-verification"
+version = "0.1.0"
+edition = "2021"
+authors = ["Nexus Memory Authors"]
+license = "Apache-2.0"
+repository = "https://github.com/nexus-memory/nexus"
+description = "TLA+ integration and verification support for Nexus Memory"
+publish = false
+rust-version = "1.75"
+
+[dependencies]
+nexus-memory = { path = "../nexus-memory" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# For parsing TLA+ output
+regex = "1.10"
