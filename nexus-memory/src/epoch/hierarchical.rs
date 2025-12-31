@@ -341,32 +341,29 @@ impl HierarchicalEpoch {
             loop {
                 let current = self.aggregation[0][parent_idx].load(Ordering::Relaxed);
                 
-                // Case 1: Parent already has a better (smaller) minimum - no update needed
-                // For epoch-based reclamation, smaller values are MORE conservative (safer).
-                // We only need to update if the new minimum is SMALLER than current.
-                if min == INACTIVE || (current != INACTIVE && current <= min) {
-                    break;
+                // CORRECTED LOGIC: Parent should hold minimum of children
+                // Skip update only if: current == min (synchronized) OR current < min (parent already better)
+                // CRITICAL FIX: Changed from "current <= min" to "current < min" to allow min=current case to skip
+                
+                if current == min {
+                    break;  // Already synchronized
                 }
                 
-                // Case 2: min is INACTIVE (all children inactive) - set parent to INACTIVE
-                // Case 3: min is active and current is INACTIVE or current < min - update
-                //
-                // MEMORY ORDERING: Release on success ensures visibility to higher levels.
-                // Relaxed on failure is safe because we'll retry with updated value.
+                // Skip if parent already has a smaller (more conservative) value
+                // Exception: Always update when transitioning to/from INACTIVE
+                if current != INACTIVE && min != INACTIVE && current < min {
+                    break;  // Parent already more conservative, skip
+                }
+                
+                // Update: min < current (improvement) OR INACTIVE transitions
                 match self.aggregation[0][parent_idx].compare_exchange_weak(
                     current,
                     min,
                     Ordering::Release,
                     Ordering::Relaxed,
                 ) {
-                    Ok(_) => break,  // Successfully updated
-                    Err(_) => {
-                        // Another thread updated concurrently. Retry to check if we still
-                        // need to update. The loop will terminate quickly because:
-                        // - If other thread set a higher value, we exit at case 1
-                        // - If other thread set a lower value, we'll succeed on next CAS
-                        continue;
-                    }
+                    Ok(_) => break,
+                    Err(_) => continue,
                 }
             }
 
@@ -390,12 +387,15 @@ impl HierarchicalEpoch {
                 .min()
                 .unwrap_or(INACTIVE);
 
-            // LOCK-FREE UPDATE: Same compare-and-exchange pattern as level 0
+            // LOCK-FREE UPDATE: Same corrected logic as level 0
             loop {
                 let current = self.aggregation[level_idx][parent_idx].load(Ordering::Relaxed);
                 
-                // Same logic: only update if min < current (or current is INACTIVE)
-                if min == INACTIVE || (current != INACTIVE && current <= min) {
+                if current == min {
+                    break;
+                }
+                
+                if current != INACTIVE && min != INACTIVE && current < min {
                     break;
                 }
                 
