@@ -346,15 +346,17 @@ impl HierarchicalEpoch {
                     break;
                 }
                 
-                // Determine if this update represents valid progress
-                // In epoch reclamation: SMALLER = more conservative (safer)
-                // Allow INACTIVE transitions and updates where min < current (more conservative)
+                // Parent must track minimum of all children
+                // Allow updates in BOTH directions:
+                // - min < current: new thread with smaller epoch (more conservative)
+                // - min > current: all threads advanced (progress)
+                // Only skip when current == min (already checked above)
                 let is_valid_progress = if current == INACTIVE {
                     true  // Transition from INACTIVE
                 } else if min == INACTIVE {
-                    true  // Transition to INACTIVE
+                    true  // Transition to INACTIVE  
                 } else {
-                    min < current  // Update to more conservative (smaller) epoch
+                    true  // Always update when min != current (bidirectional)
                 };
                 
                 if !is_valid_progress {
@@ -406,7 +408,7 @@ impl HierarchicalEpoch {
                 } else if min == INACTIVE {
                     true
                 } else {
-                    min < current
+                    true  // Always update when min != current
                 };
                 
                 if !is_valid_progress {
